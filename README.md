@@ -10,6 +10,7 @@ caching purposes. This flexibility makes it an ideal choice for projects that re
 - **In-memory Storage:** Perfect for testing purposes, avoiding the need for an actual object storage service.
 - **File Storage:** Ideal for local development and caching, simulating an object storage interface with local file system.
 - **Extensible:** Implement the `IBucket` interface to support additional storage backends.
+- **Synchronized Storage:** Built-in support for synchronized, append-only storage operations.
 
 ## Installation
 
@@ -21,7 +22,8 @@ pip install bucketbase
 
 PyPi home page: [https://pypi.org/project/bucketbase/](https://pypi.org/project/bucketbase/)
 
-Quick Start
+## Quick Start
+
 To get started with BucketBase, first import the storage class you wish to use:
 
 ```python
@@ -77,6 +79,29 @@ bucket.copy_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="copy
 bucket.move_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="move_dir/")                   
 ```
 
+### Using Synchronized Append-Only Storage
+
+For scenarios requiring thread-safe or process-safe operations, especially when implementing caching mechanisms, you can use the synchronized append-only storage functionality:
+
+```python
+from bucketbase.fs_bucket import AppendOnlyFSBucket
+
+# Create a synchronized, append-only bucket
+bucket = AppendOnlyFSBucket("/path/to/cache")
+
+# Operations are thread-safe and append-only
+bucket.put_object("data.txt", "Hello, World!")  # Works first time
+bucket.put_object("data.txt", "New content")  # Raises UnsupportedOperation - can't modify existing files
+```
+
+Key characteristics of synchronized append-only storage:
+
+- Thread-safe and process-safe operations
+- Objects cannot be modified once created
+- Deletion operations are not supported
+- Ideal for implementing caching mechanisms
+- Prevents race conditions in multi-process environments
+
 ## Advanced Usage
 
 For advanced usage, including error handling, listing objects, and more, refer to the IBucket interface and the specific implementation you are using. Each
@@ -92,7 +117,23 @@ The code in this project is licensed under MIT license.
 
 ### Changelog
 
+##### 1.4.0
+
+- Added IBucket.get_size()
+- FSBucket now creates a temp dir in the root dir, and uses it for temp files and locks, and ensures it's not listed in the object listings
+- atomic FSBucket.put_object() by storing initially in a temp file (in the same root dir), and renaming it atomically
+- prefix validations
+
+##### 1.3.2
+
+- Added minio extra dependency to work with pip
+
+##### 1.3.1
+
+- Fix bug in MinioObjectStream returned by MinioBucket.get_object_stream()
+
 ##### 1.3.0
+
 - Added streaming capability: IBucket.put_object_stream() & IBucket.get_object_stream()
 
 ##### 1.2.4

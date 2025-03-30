@@ -31,10 +31,19 @@ class FSObjectStream(ObjectStream):
 class FSBucket(IBucket):
     """
     Implements IObjectStorage interface, but stores all objects in local-mounted filesystem.
+
+    Please note that this class will add a temporary directory to the "root" director passed to the constructor.
+    This directory will be used to store temporary files during the download process (for atomic rename operation), and the lock files.
+    This directory will be created if it does not exist, and will be named as `.6275636b-6574-6261-7365.bb.tmp`
     """
-    BUFFER_SIZE = 64 * 1024
+    BUFFER_SIZE = 128 * 1024  # ubuntu default readahead is 128k: cat /sys/block/<nvme>/queue/read_ahead_kb
+    BUCKETBASE_TMP_DIR_NAME = f"$bucketbase.tmp"  # this should contain an invalid S3 char
+    TEMP_SEP = "#"  # this is an invalid S3 char
 
     def __init__(self, root: Path) -> None:
+        """
+        :param root: the root directory of the bucket.
+        """
         assert isinstance(root, Path), f"root must be a Path, but got {type(root)}"
         if not root.exists():
             root.mkdir(parents=True, exist_ok=True)
@@ -46,10 +55,17 @@ class FSBucket(IBucket):
         self.put_object_stream(name, stream)
 
     def _temp_object_absolute_path(self, name: PurePosixPath | str) -> Path:
-        tmp_obj_name = str(PurePosixPath(name)).replace("/","#")
+        tmp_obj_name = str(PurePosixPath(name)).replace(self.SEP, self.TEMP_SEP)
         return self._root / self.BUCKETBASE_TMP_DIR_NAME / f"{tmp_obj_name}@{str(int(time_ns()))}-{threading.get_ident()}.tmp"
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
+        """
+        ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written, since bottleneck is IO
+            https://github.com/eSAMTrade/bucketbase/issues/134
+
+        :param name: the object name
+        :param stream: the object content as a stream
+        """
         _name = self._validate_name(name)
         _object_path = self._root / _name
 
@@ -106,15 +122,15 @@ class FSBucket(IBucket):
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
         """
         Performs a deep/recursive listing of all objects with given prefix.
-        """
-        do_exclude_tmp_dir = False
-        if IBucket.BUCKETBASE_TMP_DIR_NAME.startswith(str(prefix)):
-            if prefix.startswith(IBucket.BUCKETBASE_TMP_DIR_NAME):
-                raise ValueError(f"Prefix {prefix} is not allowed as it starts with the reserved name {IBucket.BUCKETBASE_TMP_DIR_NAME}")
-            do_exclude_tmp_dir = True
+        It will return the complete list of objects, even if they are in subdirectories, and event if the list is huge (it will perform pagination).
 
-        dir_path, _ = self._split_prefix(prefix)
-        s_prefix = str(prefix)
+        :param prefix: prefix of objects to list. prefix can be empty ("")end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
+        """
+        s_prefix = self._validate_prefix(prefix)
+
+        do_exclude_tmp_dir = s_prefix == ""  # since the tmp dir starts with invalid char, any prefix won't match it
+        dir_path, _ = self._split_prefix(s_prefix)
 
         start_list_lpath = self._root / dir_path
 
@@ -122,19 +138,20 @@ class FSBucket(IBucket):
         matching_objects = self._get_recurs_listing(start_list_lpath, s_prefix)
 
         if do_exclude_tmp_dir:
-            matching_objects = matching_objects.filter(lambda x: not x.as_posix().startswith(IBucket.BUCKETBASE_TMP_DIR_NAME))
+            return matching_objects.filter(lambda x: not x.as_posix().startswith(self.BUCKETBASE_TMP_DIR_NAME)).toList()
 
         return matching_objects
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
         """
         Performs a non-recursive listing of all objects with given prefix.
-        """
-        if IBucket.BUCKETBASE_TMP_DIR_NAME.startswith(str(prefix)):
-            if prefix.startswith(IBucket.BUCKETBASE_TMP_DIR_NAME):
-                raise ValueError(f"Prefix {prefix} is not allowed as it starts with the reserved name {IBucket.BUCKETBASE_TMP_DIR_NAME}")
+        It will return a `ShallowListing` object, which contains a list of objects and a list of common prefixes (equivalent to directories on FileSystems).
 
-        dir_path, name_prefix = self._split_prefix(prefix)
+        :param prefix: prefix of objects to list. prefix can be empty ("")end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
+        """
+        s_prefix = self._validate_prefix(prefix)
+        dir_path, name_prefix = self._split_prefix(s_prefix)
         start_list_lpath = self._root / dir_path
 
         listing = start_list_lpath.glob(name_prefix + "*")
@@ -145,8 +162,8 @@ class FSBucket(IBucket):
                 obj_path = PurePosixPath(p.relative_to(self._root))
                 matching_objects.append(obj_path)
             elif p.is_dir():
-                dir_path = p.relative_to(self._root).as_posix() + "/"
-                if dir_path.startswith(IBucket.BUCKETBASE_TMP_DIR_NAME):
+                dir_path = p.relative_to(self._root).as_posix() + self.SEP
+                if dir_path.startswith(self.BUCKETBASE_TMP_DIR_NAME):
                     continue
                 prefixes.append(dir_path)
             else:
@@ -210,7 +227,7 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
 
     def _lock_object(self, name: PurePosixPath | str):
         name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, "$")
+        lock_object_name = name.replace(self.SEP, FSBucket.TEMP_SEP)
         with self._my_lock:
             if lock_object_name in self._locks:
                 file_lock = self._locks[lock_object_name]
@@ -221,7 +238,7 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
 
     def _unlock_object(self, name: PurePosixPath | str):
         name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, "$")
+        lock_object_name = name.replace(self.SEP, FSBucket.TEMP_SEP)
         with self._my_lock:
             if lock_object_name not in self._locks:
                 raise RuntimeError(f"Object {name} is not locked")
@@ -231,5 +248,5 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
     @classmethod
     def build(cls, root: Path, locks_path: Optional[Path] = None) -> "AppendOnlyFSBucket":
         if locks_path is None:
-            locks_path = root / cls.BUCKETBASE_TMP_DIR_NAME / "__locks__"
+            locks_path = root / FSBucket.BUCKETBASE_TMP_DIR_NAME / "__locks__"
         return cls(FSBucket(root), locks_path)

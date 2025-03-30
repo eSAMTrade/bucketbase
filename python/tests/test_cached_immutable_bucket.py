@@ -166,7 +166,7 @@ class TestIntegratedCachedImmutableBucket(TestCase):
         self.assertRaises(io.UnsupportedOperation, self.storage.remove_objects, ["test"])
 
     def test_get_size(self):
-        # due to asser_called_once_with, we need to reinit each one.
+        # due to assert_called_once_with, we need to reinit each one.
         # this could be written as different test functions, but this is more concise, IMO
         with self.subTest("local"):
             cache = MagicMock(spec=IBucket)

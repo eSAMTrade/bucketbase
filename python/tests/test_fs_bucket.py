@@ -1,19 +1,20 @@
 import threading
-from threading import Barrier
-from pathlib import Path
+from io import BytesIO
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from threading import Barrier
 from unittest import TestCase
 
-from chunkedstream import ChunkedCallbackStream
-from bucketbase import FSBucket
 from bucket_tester import IBucketTester
+from bucketbase import FSBucket, IBucket
+from chunkedstream import ChunkedCallbackStream
 
 
 class TestFSBucket(TestCase):
     def setUp(self):
         self.temp_dir = TemporaryDirectory()
-        temp_dir_path = Path(self.temp_dir.name)
-        self.storage = FSBucket(temp_dir_path)
+        self.temp_dir_path = Path(self.temp_dir.name)
+        self.storage = FSBucket(self.temp_dir_path)
         self.tester = IBucketTester(self.storage, self)
 
     def tearDown(self) -> None:
@@ -27,7 +28,6 @@ class TestFSBucket(TestCase):
 
         # check no remaining files in temp dir
         self.assertEqual(0, len(list((self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME).iterdir())))
-
 
     def test_list_objects(self):
         self.tester.test_list_objects()
@@ -44,18 +44,18 @@ class TestFSBucket(TestCase):
     def test_get_size(self):
         self.tester.test_get_size()
 
-
     def test_broken_stream_upload(self):
         """on broken stream upload, the file should not be "uploaded" i.e. not shown in list and shallow_list"""
         test_content = b"This is some test content that should not be completely uploaded"
         test_object_name = "broken_upload_test.txt"
 
         def break_10th_chunk(chunk, position, size):
+            self.assertFalse(self.storage.exists(test_object_name))
+
             if position >= 10:
                 raise IOError("Simulated error during upload")
 
-        broken_stream = ChunkedCallbackStream(test_content,
-                                              callback=break_10th_chunk, chunk_size=10)
+        broken_stream = ChunkedCallbackStream(test_content, callback=break_10th_chunk, chunk_size=10)
 
         with self.assertRaises(IOError):
             # noinspection PyTypeChecker
@@ -90,13 +90,54 @@ class TestFSBucket(TestCase):
         self.assertEqual(0, len(list(bucket2.list_objects(""))))
 
     def test_listing_our_dir(self):
+        obj_name = PurePosixPath("dir1/file.txt")
+        self.storage.put_object_stream(obj_name, BytesIO( b"Test content"))
+        tmp_file = self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME/f"{obj_name.as_posix().replace('/', '#')}.tmp"
+        self.assertTrue((self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
+        with open(tmp_file, "wb") as f:
+            f.write(b"Test content")
+
         with self.assertRaises(ValueError) as context:
             self.storage.list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME)
-        self.assertRegex(str(context.exception), r"^Prefix \S+ is not allowed")
-    def test_shallow_listing_our_dir(self):
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
         with self.assertRaises(ValueError) as context:
-            self.storage.shallow_list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME)
-        self.assertRegex(str(context.exception), r"^Prefix \S+ is not allowed")
+            self.storage.list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + "/something")
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+        with self.assertRaises(ValueError) as context:
+            self.storage.list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + IBucket.SEP)
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+        with self.assertRaises(ValueError) as context:
+            self.storage.list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + ".something")
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+
+        self.assertListEqual([obj_name],self.storage.list_objects(""))
+        self.assertListEqual([obj_name], self.storage.list_objects("d"))
+
+    def test_shallow_listing_our_dir(self):
+        obj_name = PurePosixPath("dir1/file.txt")
+        self.storage.put_object_stream(obj_name, BytesIO( b"Test content"))
+        tmp_file = self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME/f"{obj_name.as_posix().replace('/', '#')}.tmp"
+        self.assertTrue((self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
+        with open(tmp_file, "wb") as f:
+            f.write(b"Test content")
+
+        with self.assertRaises(ValueError) as context:
+            self.storage.shallow_list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + "/something")
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+        with self.assertRaises(ValueError) as context:
+            self.storage.shallow_list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + IBucket.SEP)
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+        with self.assertRaises(ValueError) as context:
+            self.storage.shallow_list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + ".something")
+        self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
+
+        s_listing = self.storage.shallow_list_objects("")
+        self.assertListEqual([], s_listing.objects)
+        self.assertListEqual(["dir1/"], s_listing.prefixes)
+
+        s_listing = self.storage.shallow_list_objects("d")
+        self.assertListEqual([], s_listing.objects)
+        self.assertListEqual(["dir1/"], s_listing.prefixes)
 
     def test_get_size_during_writing(self):
         """Test that get_size raises FileNotFoundError while writing an object one byte at a time until complete."""
@@ -128,8 +169,33 @@ class TestFSBucket(TestCase):
         self.assertTrue(size_checks > 0, "No size checks were performed during writing")
         self.assertTrue(not_found_checks > 0, "No FileNotFoundError exceptions were caught")
 
+    def test_concurrent_put_streams(self):
+        test_cases = [
+            {
+                'name':             'same_file',
+                'filename':         'test/dir/for/concurrent_test.txt',
+                'wanted_num_files': 1,
+                'num_threads':      9
+            },
+            {
+                'name':             'distinct_files',
+                'filename':         '',
+                'wanted_num_files': 9,
+                'num_threads':      9
+            }
+        ]
 
-    def _test_concurrent_put_stream(self, fname=None, wanted_num_files=1, num_threads = 6):
+        for test_case in test_cases:
+            self.setUp()  # this will run redundantly, but it's ok
+            with self.subTest(name=test_case['name']):
+                self._run_concurrent_put_stream(
+                    fname=test_case['filename'],
+                    wanted_num_files=test_case['wanted_num_files'],
+                    num_threads=test_case['num_threads']
+                )
+            self.tearDown()
+
+    def _run_concurrent_put_stream(self, fname=None, wanted_num_files=1, num_threads=6):
         storage_workdir = self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME
 
         barrier_started = Barrier(num_threads + 1)
@@ -168,10 +234,5 @@ class TestFSBucket(TestCase):
             thread.join()
 
         self.assertEqual(0, len(list(storage_workdir.iterdir())), f"Expected 0 files in {storage_workdir}, but found {len(list(storage_workdir.iterdir()))}")
-        self.assertEqual(wanted_num_files, len(list(self.storage.list_objects(""))), f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}")
-
-    def test_concurrent_put_streams_same_file(self):
-        self._test_concurrent_put_stream("test/dir/for/concurrent_test.txt", wanted_num_files=1, num_threads=9)
-
-    def test_concurrent_put_streams_distinct_files(self):
-        self._test_concurrent_put_stream("", wanted_num_files=9, num_threads=9)
+        self.assertEqual(wanted_num_files, len(list(self.storage.list_objects(""))),
+                         f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}")
