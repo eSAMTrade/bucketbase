@@ -2,8 +2,9 @@ import os
 import threading
 from io import BytesIO
 from pathlib import Path, PurePosixPath
+from random import random
 from threading import RLock
-from time import time_ns, sleep
+from time import time_ns, sleep, time
 from typing import Dict, Iterable, Optional, Union, BinaryIO
 
 from streamerate import slist
@@ -40,51 +41,49 @@ class FSBucket(IBucket):
     BUCKETBASE_TMP_DIR_NAME = f"$bucketbase.tmp"  # this should contain an invalid S3 char
     TEMP_SEP = "#"  # this is an invalid S3 char
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, timeout_ms: int = 5000) -> None:
         """
         :param root: the root directory of the bucket.
+        :param timeout_ms: the timeout in milliseconds for the atomic rename operation.
         """
         assert isinstance(root, Path), f"root must be a Path, but got {type(root)}"
         if not root.exists():
             root.mkdir(parents=True, exist_ok=True)
         assert root.is_dir(), f"root must be a directory, but got {root}"
         self._root = root
+        self._timeout_ms = timeout_ms
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         stream = BytesIO(content) if isinstance(content, (bytes, bytearray)) else BytesIO(content.encode())
         self.put_object_stream(name, stream)
 
-    def _temp_object_absolute_path(self, name: PurePosixPath | str) -> Path:
+    def _get_tmp_obj_path(self, name: PurePosixPath | str) -> Path:
         tmp_obj_name = str(PurePosixPath(name)).replace(self.SEP, self.TEMP_SEP)
         return self._root / self.BUCKETBASE_TMP_DIR_NAME / f"{tmp_obj_name}@{str(int(time_ns()))}-{threading.get_ident()}.tmp"
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         """
-        ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written, since bottleneck is IO
-            https://github.com/eSAMTrade/bucketbase/issues/134
+        Stores an object with the given name using a stream as content source in a synchronized manner.
+        Prevents concurrent writes to the same object.
 
-        :param name: the object name
-        :param stream: the object content as a stream
+        :param name: Name of the object to store
+        :param stream: Binary stream containing the object's content
+        :raises ValueError: If name is invalid
+        :raises io.UnsupportedOperation: If the object already exists
+        :raises IOError: If stream operations fail, or if the object atomic renaming times out due to high concurrency.
         """
         _name = self._validate_name(name)
         _object_path = self._root / _name
 
-        _object_path_temp = self._temp_object_absolute_path(name)
+        temp_obj_path = self._get_tmp_obj_path(name)
         try:
-            _object_path_temp.parent.mkdir(parents=True, exist_ok=True)
-            with _object_path_temp.open("wb") as f:
+            temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
+            with temp_obj_path.open("wb") as f:
                 while chunk := stream.read(self.BUFFER_SIZE):
+                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written, since bottleneck is IO
+                    #       https://github.com/eSAMTrade/bucketbase/issues/134
                     f.write(chunk)
-            _object_path.parent.mkdir(parents=True, exist_ok=True)
-            for attempt in range(10):
-                try:
-                    os.replace(_object_path_temp, _object_path)
-                    return
-                except PermissionError:
-                    if attempt < 9:
-                        sleep(0.05)
-                    else:
-                        raise
+            self._try_rename_tmp_file(temp_obj_path, _object_path)
         except FileNotFoundError as exc:
             if os.name == "nt":
                 if len(str(_object_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
@@ -93,6 +92,19 @@ class FSBucket(IBucket):
                         "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
                     ) from exc
             raise
+
+    def _try_rename_tmp_file(self, tmp_file_path: Path, object_path: Path) -> None:
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        timeout_ms = time() + self._timeout_ms
+
+        while time() < timeout_ms:
+            try:
+                os.replace(tmp_file_path, object_path)
+                return
+            except PermissionError:
+                # sleep between 50 and 100 ms
+                sleep(0.05 + 0.05 * random())
+        raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """
