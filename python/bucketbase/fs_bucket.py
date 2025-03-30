@@ -95,7 +95,7 @@ class FSBucket(IBucket):
 
     def _try_rename_tmp_file(self, tmp_file_path: Path, object_path: Path) -> None:
         object_path.parent.mkdir(parents=True, exist_ok=True)
-        timeout_ms = time() + self._timeout_ms
+        timeout_ms = time() + self._timeout_ms / 1000
 
         while time() < timeout_ms:
             try:
