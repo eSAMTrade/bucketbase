@@ -3,14 +3,13 @@ import threading
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from random import random
-from threading import RLock
 from time import time_ns, sleep, time
-from typing import Dict, Iterable, Optional, Union, BinaryIO
+from typing import  Iterable, Optional, Union, BinaryIO
 
 from streamerate import slist
 
+from bucketbase import namedlock
 from bucketbase.errors import DeleteError
-from bucketbase.file_lock import FileLockForPath
 from bucketbase.ibucket import ShallowListing, IBucket, AbstractAppendOnlySynchronizedBucket, ObjectStream
 
 
@@ -33,9 +32,9 @@ class FSBucket(IBucket):
     """
     Implements IObjectStorage interface, but stores all objects in local-mounted filesystem.
 
-    Please note that this class will add a temporary directory to the "root" director passed to the constructor.
+    Please note that this class will add a temporary directory to the "root" directory passed to the constructor.
     This directory will be used to store temporary files during the download process (for atomic rename operation), and the lock files.
-    This directory will be created if it does not exist, and will be named as `.6275636b-6574-6261-7365.bb.tmp`
+    This directory will be created if it does not exist, and will be named as "$bucketbase.tmp".
     """
     BUFFER_SIZE = 128 * 1024  # ubuntu default readahead is 128k: cat /sys/block/<nvme>/queue/read_ahead_kb
     BUCKETBASE_TMP_DIR_NAME = f"$bucketbase.tmp"  # this should contain an invalid S3 char
@@ -134,9 +133,9 @@ class FSBucket(IBucket):
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
         """
         Performs a deep/recursive listing of all objects with given prefix.
-        It will return the complete list of objects, even if they are in subdirectories, and event if the list is huge (it will perform pagination).
+        It will return the complete list of objects, even if they are in subdirectories, and even if the list is huge (it will perform pagination).
 
-        :param prefix: prefix of objects to list. prefix can be empty ("")end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :param prefix: prefix of objects to list. prefix can be empty ("") and end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
         :raises ValueError: if the prefix is invalid
         """
         s_prefix = self._validate_prefix(prefix)
@@ -210,7 +209,7 @@ class FSBucket(IBucket):
             try:
                 p.unlink(missing_ok=True)
             except Exception as e:
-                delete_errors.append(DeleteError(code=404, message=e, name=str(obj), version_id=None))
+                delete_errors.append(DeleteError(code=404, message=e, name=str(obj)))
             else:
                 self._try_remove_empty_dirs(p)
         return delete_errors
@@ -233,29 +232,19 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         The locks_path should be a local file system path with write permissions.
         """
         super().__init__(base)
-        self._locks: Dict[str, FileLockForPath] = {}
-        self._my_lock = RLock()
         self._locks_path = locks_path
+        self._lock_manager = namedlock.FileLockManager(locks_path)
+
 
     def _lock_object(self, name: PurePosixPath | str):
         name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, FSBucket.TEMP_SEP)
-        with self._my_lock:
-            if lock_object_name in self._locks:
-                file_lock = self._locks[lock_object_name]
-            else:
-                file_lock = FileLockForPath(self._locks_path / lock_object_name)
-                self._locks[lock_object_name] = file_lock
-        file_lock.acquire()
+        lock = self._lock_manager.get_lock(name)
+        lock.acquire()
 
     def _unlock_object(self, name: PurePosixPath | str):
         name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, FSBucket.TEMP_SEP)
-        with self._my_lock:
-            if lock_object_name not in self._locks:
-                raise RuntimeError(f"Object {name} is not locked")
-            file_lock = self._locks[lock_object_name]
-            file_lock.release()
+        lock = self._lock_manager.get_lock(name, only_existing=True)
+        lock.release()
 
     @classmethod
     def build(cls, root: Path, locks_path: Optional[Path] = None) -> "AppendOnlyFSBucket":

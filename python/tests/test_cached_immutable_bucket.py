@@ -1,10 +1,11 @@
 import io
 import tempfile
+import threading
 from pathlib import Path, PurePosixPath
 from unittest import TestCase
 from unittest.mock import MagicMock
 
-from bucketbase import MemoryBucket, AppendOnlyFSBucket, CachedImmutableBucket, IBucket
+from bucketbase import MemoryBucket, AppendOnlyFSBucket, CachedImmutableBucket, IBucket, FSBucket
 from tests.bucket_tester import IBucketTester
 
 
@@ -203,3 +204,88 @@ class TestIntegratedCachedImmutableBucket(TestCase):
                 storage.get_size("test")
             cache.get_size.assert_called_once_with("test")
             main.get_size.assert_called_once_with("test")
+
+    def test_put_not_allowed(self):
+        # Test that put_object raises an exception
+        with self.assertRaises(io.UnsupportedOperation):
+            self.storage.put_object("test", b"content")
+
+        # Test that put_object_stream raises an exception
+        with self.assertRaises(io.UnsupportedOperation):
+            self.storage.put_object_stream("test", io.BytesIO(b"content"))
+
+    def test_build_from_fs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_cache_dir = Path(temp_dir) / "cache"
+            main_dir = Path(temp_dir) / "main"
+            main_dir.mkdir(parents=True, exist_ok=True)
+
+            # put some files/dirs in the path
+            (main_dir / "dir").mkdir(parents=True)
+            (main_dir / "dir-no-files--ignored").mkdir(parents=True)
+            (main_dir / "file1.txt").write_bytes(b"test content /file1.txt")
+            (main_dir / "dir" / "file2.txt").write_bytes(b"test content /dir/file2.txt")
+
+            cache_root = Path(temp_cache_dir)
+            main = FSBucket(main_dir)
+
+            cached_bucket = CachedImmutableBucket.build_from_fs(cache_root, main)
+            # at first - no files in the cache
+            lst = [x for x in cache_root.iterdir() if not str(x).endswith(main.BUCKETBASE_TMP_DIR_NAME)]
+            self.assertEqual(lst, [])
+
+            cached_bucket.get_object("dir/file2.txt")
+            self.assertTrue(cached_bucket._cache.exists("dir/file2.txt"))
+            self.assertTrue((cache_root / "dir" / "file2.txt").exists())
+            on_disk_cache = sorted(str(Path(x).relative_to(cache_root)) for x in cache_root.iterdir())
+            self.assertEqual(on_disk_cache, [FSBucket.BUCKETBASE_TMP_DIR_NAME, "dir"])
+
+            self.assertEqual(list([str(x) for x in cached_bucket.list_objects("")]), ["file1.txt", "dir/file2.txt"])
+
+
+    def test_cachedappendonly_one_fetch_from_main_bucket(self):
+        # Test concurrent access to CachedImmutableBucket to verify object is only fetched once from main bucket
+
+        num_threads = 29
+
+        obj_name = "concurrent_test_object"
+        content = b"test concurrent content"
+
+        # Create a mock main bucket to track calls
+        get_object_calls = []
+
+        class MockMainBucket(MemoryBucket):
+            def get_object(self, name):
+                get_object_calls.append(name)
+                return super().get_object(name)
+
+        mock_main = MockMainBucket()
+        mock_main.put_object(obj_name, content)
+
+        base_bucket = MemoryBucket()
+        with tempfile.TemporaryDirectory() as fs_dir:
+            cache_bucket = AppendOnlyFSBucket(base_bucket, locks_path=Path(fs_dir)/"locks")
+            bucket_in_test = CachedImmutableBucket(cache=cache_bucket, main=mock_main)
+
+            results_lock = threading.Lock()
+            results = []
+            threads = []
+
+            def get_object_from_thread():
+                result = bucket_in_test.get_object(obj_name)
+                with results_lock:
+                    results.append(result)
+
+            for _ in range(num_threads):
+                thread = threading.Thread(target=get_object_from_thread)
+                threads.append(thread)
+                thread.start()
+
+            for thread in threads:
+                thread.join()
+
+            # Verify results
+            self.assertEqual(len(get_object_calls), 1, "Main bucket's get_object should be called exactly once")
+            self.assertEqual(len(results), num_threads, "All threads should have retrieved the content")
+            for result in results:
+                self.assertEqual(result, content, "All threads should get the same content")
