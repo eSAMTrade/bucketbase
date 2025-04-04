@@ -176,6 +176,10 @@ class IBucket(PydanticValidated, ABC):
         """
         raise NotImplementedError()
 
+    @abstractmethod
+    def get_size(self, name: PurePosixPath | str) -> int:
+        raise NotImplementedError()
+
     def fput_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         """
         Stores the content of a file as an object.
@@ -370,6 +374,9 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
             return self._base_bucket.get_object(name)
         finally:
             self._unlock_object(name)
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        return self._base_bucket.get_size(name)
 
     def get_size(self, name: PurePosixPath | str) -> int:
         return self._base_bucket.get_size(name)
