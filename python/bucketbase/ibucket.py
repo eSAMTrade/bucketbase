@@ -8,7 +8,6 @@ from pathlib import PurePosixPath, Path
 from typing import Tuple, Optional, Union, Iterable, BinaryIO
 
 from pyxtension import PydanticValidated, validate
-from pyxtension.models import ImmutableExtModel
 from streamerate import slist
 from typing_extensions import Self
 
@@ -19,9 +18,8 @@ from bucketbase.errors import DeleteError
 S3_NAME_CHARS_NO_SEP = r"\w!\-\.')("
 S3_NAME_SAFE_RE = rf"^[{S3_NAME_CHARS_NO_SEP}][{S3_NAME_CHARS_NO_SEP}/]+$"
 
-
 @dataclass(frozen=True)
-class ShallowListing(ImmutableExtModel):
+class ShallowListing:
     """
     :param objects: list of object names, as PurePosixPath
     :param prefixes: list of prefixes (equivalent to directories on FileSystems) as strings, ending with "/"
@@ -115,6 +113,10 @@ class IBucket(PydanticValidated, ABC):
         """
         :raises FileNotFoundError: if the object is not found
         """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_size(self, name: PurePosixPath | str) -> int:
         raise NotImplementedError()
 
     def fput_object(self, name: PurePosixPath | str, file_path: Path) -> None:
@@ -246,6 +248,9 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
         finally:
             self._unlock_object(name)
         return content
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        return self._base_bucket.get_size(name)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         if self.exists(name):

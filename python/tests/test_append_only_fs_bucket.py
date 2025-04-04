@@ -90,3 +90,17 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # Verify that both threads were able to acquire the lock
         self.assertFalse(lock_acquired[0], "The first thread should have released the lock")
         self.assertTrue(lock_acquired[1], "The second thread should have acquired the lock after the first thread released it")
+
+    def test_get_size(self):
+        bucket = AppendOnlyFSBucket(self.mem_base_bucket, self.locks_path)
+        object_name = "test_object"
+        content = b"test content"
+
+        bucket.put_object(object_name, content)
+
+        size = bucket.get_size(object_name)
+        self.assertEqual(size, len(content))
+
+        with self.assertRaises(FileNotFoundError):
+            bucket.get_size(f"non_existent_object")
+

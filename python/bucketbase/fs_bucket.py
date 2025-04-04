@@ -159,6 +159,9 @@ class FSBucket(IBucket):
         """ This is not part of the IBucket interface, but it's useful for multiple purposes. """
         return self._root
 
+    def get_size(self, name: PurePosixPath | str) -> int:
+        return os.stat(self._root / name).st_size
+
 
 class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
     """

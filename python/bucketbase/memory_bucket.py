@@ -81,3 +81,11 @@ class MemoryBucket(IBucket):
                 if obj in self._objects:
                     self._objects.pop(obj)
         return delete_errors
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        _name = self._validate_name(name)
+
+        with self._lock:
+            if _name not in self._objects:
+                raise FileNotFoundError(f"Object {_name} not found in MemoryObjectStore")
+            return len(self._objects[_name])  # Direct access to stored object

@@ -33,3 +33,6 @@ class TestFSBucket(TestCase):
 
     def test_remove_objects(self):
         self.tester.test_remove_objects()
+
+    def test_get_size(self):
+        self.tester.test_get_size()

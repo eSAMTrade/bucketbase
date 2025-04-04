@@ -179,3 +179,12 @@ class MinioBucket(IBucket):
         # the return value is a generator and if will not be converted to a list the deletion won't happen
         errors = slist(self._minio_client.remove_objects(self._bucket_name, delete_objects_stream))
         return errors
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        try:
+            st = self._minio_client.stat_object(self._bucket_name, str(name))
+            return st.size
+        except minio.error.S3Error as e:
+            if e.code == "NoSuchKey":
+                raise FileNotFoundError(f"Object {name} not found in bucket {self._bucket_name} on Minio") from e
+            raise

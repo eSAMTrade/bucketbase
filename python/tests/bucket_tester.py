@@ -123,7 +123,7 @@ class IBucketTester:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
 
         objects = self.storage.list_objects(path_with2025_keys)
-        self.test_case.assertEquals(2025, objects.size())
+        self.test_case.assertEqual(2025, objects.size())
 
     def test_shallow_list_objects(self):
         unique_dir = f"dir{self.us}"
@@ -155,8 +155,8 @@ class IBucketTester:
     def test_shallow_list_objects_with_over1000keys(self):
         path_with2025_keys = self._ensure_dir_with_2025_keys()
         shallow_listing = self.storage.shallow_list_objects(path_with2025_keys)
-        self.test_case.assertEquals(2025, shallow_listing.objects.size())
-        self.test_case.assertEquals(0, shallow_listing.prefixes.size())
+        self.test_case.assertEqual(2025, shallow_listing.objects.size())
+        self.test_case.assertEqual(0, shallow_listing.prefixes.size())
 
     def test_exists(self):
         unique_dir = f"dir{self.us}"
@@ -200,3 +200,21 @@ class IBucketTester:
 
             stream(range(2025)).fastmap(upload_file, poolSize=100).to_list()
         return self.PATH_WITH_2025_KEYS
+
+    def test_get_size(self):
+        # Setup the test
+        unique_dir = f"dir{self.us}"
+        path1 = PurePosixPath(f"{unique_dir}/file1.txt")
+
+        content1 = b"Content 1"
+
+        self.storage.put_object(path1, content1)
+
+        self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
+        with self.test_case.assertRaises(FileNotFoundError):
+            self.storage.get_size(f"{unique_dir}/NOT.FOUND")
+
+        # update object -- new size
+        content1 = b"Content 1 -- modified"
+        self.storage.put_object(path1, content1)
+        self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
