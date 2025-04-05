@@ -50,6 +50,7 @@ class IBucket(PydanticValidated, ABC):
     SEP = "/"
     SPLIT_PREFIX_RE = re.compile(rf"^((?:[{S3_NAME_CHARS_NO_SEP}]+/)*)([{S3_NAME_CHARS_NO_SEP}]*)$")
     OBJ_NAME_RE = re.compile(rf"^(?:[{S3_NAME_CHARS_NO_SEP}]+/)*[{S3_NAME_CHARS_NO_SEP}]+$")
+    PREFIX_RE = re.compile(rf"^(?:[{S3_NAME_CHARS_NO_SEP}]+/)*[{S3_NAME_CHARS_NO_SEP}]*$")
     DEFAULT_ENCODING = "utf-8"
     MINIO_PATH_TEMP_SUFFIX_LEN = 43  # Minio will add to any downloaded path a `stat.etag + '.part.minio'` suffix
     WINDOWS_MAX_PATH = 260
@@ -100,6 +101,21 @@ class IBucket(PydanticValidated, ABC):
             name = str(name)
         validate(IBucket.OBJ_NAME_RE.match(name), f"Invalid S3 object name: {name}")
         return name
+
+    @staticmethod
+    def _validate_prefix(prefix: PurePosixPath | str) -> str:
+        """
+        Validates the given prefix.
+        Throws ValueError if the prefix is invalid, thus this can be used to validate the prefix.
+
+        :param prefix: Prefix to validate
+        :return: Validated prefix as string
+        :raises ValueError: If the prefix is invalid
+        """
+        if isinstance(prefix, PurePosixPath):
+            prefix = str(prefix)
+        validate(IBucket.PREFIX_RE.match(prefix), f"Invalid S3 prefix: {prefix}")
+        return prefix
 
     @abstractmethod
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
@@ -311,6 +327,8 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
         :raises io.UnsupportedOperation: If the object already exists
         """
         self._lock_object(name)
+        if self._base_bucket.exists(name):
+            raise io.UnsupportedOperation(f"Object {name} already exists in AppendOnlySynchronizedBucket")
         try:
             self._base_bucket.put_object(name, content)
         finally:
@@ -328,6 +346,8 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
         :raises IOError: If stream operations fail
         """
         self._lock_object(name)
+        if self._base_bucket.exists(name):
+            raise io.UnsupportedOperation(f"Object {name} already exists in AppendOnlySynchronizedBucket")
         try:
             self._base_bucket.put_object_stream(name, stream)
         finally:

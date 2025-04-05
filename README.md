@@ -117,6 +117,13 @@ The code in this project is licensed under MIT license.
 
 ### Changelog
 
+##### 1.4.0
+
+- Added IBucket.get_size()
+- FSBucket now creates a temp dir in the root dir, and uses it for temp files and locks, and ensures it's not listed in the object listings
+- atomic FSBucket.put_object() by storing initially in a temp file (in the same root dir), and renaming it atomically
+- prefix validations
+
 ##### 1.3.2
 
 - Added minio extra dependency to work with pip

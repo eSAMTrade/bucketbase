@@ -106,14 +106,21 @@ class IBucketTester:
         objects = self.storage.list_objects(PurePosixPath(f"{unique_dir}"))
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
-        expected_objects = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
-        self.test_case.assertListEqual(objects, expected_objects)
+        expected_objects_all = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
+        self.test_case.assertListEqual(objects, expected_objects_all)
 
         objects = self.storage.list_objects(f"{unique_dir}/")
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
         expected_objects = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt")]
         self.test_case.assertListEqual(objects, expected_objects)
+
+        # here we expect that on Minio there will be other dirs/objects, so we just check of our objects do exist
+        objects = self.storage.list_objects("")
+        self.test_case.assertIsInstance(objects, slist)
+        expected_objects_set = set(expected_objects_all)
+        real_objects_set = objects.toSet()
+        self.test_case.assertTrue(expected_objects_set.issubset(real_objects_set))
 
         # Invalid Prefix cases
         for prefix in self.INVALID_PREFIXES:
@@ -147,6 +154,13 @@ class IBucketTester:
         self.test_case.assertIsInstance(shallow_listing.prefixes, slist)
         self.test_case.assertListEqual(shallow_listing.objects, expected_objects)
         self.test_case.assertEqual(shallow_listing.prefixes, expected_prefixes)
+
+        # here we expect that on Minio there will be other dirs/objects, since the bucket is shared, so we just check of our objects do exist
+        shallow_listing = self.storage.shallow_list_objects("")
+        expected_objects = {PurePosixPath(f"{unique_dir}file1.txt")}
+        expected_prefixes = {f"{unique_dir}/"}
+        self.test_case.assertTrue(expected_objects.issubset(shallow_listing.objects.toSet()))
+        self.test_case.assertTrue(expected_prefixes.issubset(shallow_listing.prefixes.toSet()))
 
         # Invalid Prefix cases
         for prefix in self.INVALID_PREFIXES:
