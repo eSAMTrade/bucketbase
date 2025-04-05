@@ -29,10 +29,17 @@ class FSObjectStream(ObjectStream):
 class FSBucket(IBucket):
     """
     Implements IObjectStorage interface, but stores all objects in local-mounted filesystem.
+
+    Please note that this class will add a temporary directory to the "root" directory passed to the constructor.
+    This directory will be used to store temporary files during the download process (for atomic rename operation), and the lock files.
+    This directory will be created if it does not exist, and will be named as "$bucketbase.tmp".
     """
     BUFFER_SIZE = 64 * 1024
 
     def __init__(self, root: Path) -> None:
+        """
+        :param root: the root directory of the bucket.
+        """
         assert isinstance(root, Path), f"root must be a Path, but got {type(root)}"
         if not root.exists():
             root.mkdir(parents=True, exist_ok=True)
@@ -44,6 +51,16 @@ class FSBucket(IBucket):
         self.put_object_stream(name, stream)
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
+        """
+        Stores an object with the given name using a stream as content source in a synchronized manner.
+        Prevents concurrent writes to the same object.
+
+        :param name: Name of the object to store
+        :param stream: Binary stream containing the object's content
+        :raises ValueError: If name is invalid
+        :raises io.UnsupportedOperation: If the object already exists
+        :raises IOError: If stream operations fail, or if the object atomic renaming times out due to high concurrency.
+        """
         _name = self._validate_name(name)
         _object_path = self._root / _name
         try:
@@ -91,6 +108,10 @@ class FSBucket(IBucket):
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
         """
         Performs a deep/recursive listing of all objects with given prefix.
+        It will return the complete list of objects, even if they are in subdirectories, and even if the list is huge (it will perform pagination).
+
+        :param prefix: prefix of objects to list. prefix can be empty ("") and end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
         """
         dir_path, _ = self._split_prefix(prefix)
         s_prefix = str(prefix)
@@ -104,6 +125,10 @@ class FSBucket(IBucket):
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
         """
         Performs a non-recursive listing of all objects with given prefix.
+        It will return a `ShallowListing` object, which contains a list of objects and a list of common prefixes (equivalent to directories on FileSystems).
+
+        :param prefix: prefix of objects to list. prefix can be empty ("")end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
         """
         dir_path, name_prefix = self._split_prefix(prefix)
         start_list_lpath = self._root / dir_path
