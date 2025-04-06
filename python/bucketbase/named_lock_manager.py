@@ -1,17 +1,16 @@
 import threading
 from abc import ABC, abstractmethod
-from pathlib import Path
-
-from bucketbase.file_lock import FileLockForPath
+from pathlib import Path, PurePosixPath
 
 from bucketbase import IBucket
+from bucketbase.file_lock import FileLockForPath
 
 
 class BaseNamedLockManager(ABC):
     """Abstract base class for managing locks by name"""
 
     @abstractmethod
-    def get_lock(self, name: str, only_existing=False) -> FileLockForPath:
+    def get_lock(self, name: PurePosixPath | str, only_existing=False) -> FileLockForPath:
         """Get a lock for the given name
         :param name: name of the object to lock for
         :param only_existing: If True, return only an existing lock if available; if false - create a new one if needed
@@ -26,7 +25,8 @@ class ThreadLockManager(BaseNamedLockManager):
         self._locks = {}
         self._lock_dict_lock = threading.Lock()
 
-    def get_lock(self, name: str, only_existing=False) -> threading.Lock:
+    def get_lock(self, name: PurePosixPath | str, only_existing=False) -> threading.Lock:
+        name = IBucket._validate_name(name)  # pylint: disable=protected-access
         with self._lock_dict_lock:
             if name not in self._locks:
                 if only_existing:
@@ -46,8 +46,8 @@ class FileLockManager(BaseNamedLockManager):
         self._locks = {}
         self._lock_dict_lock = threading.Lock()
 
-    def get_lock(self, name: str, only_existing=False) -> FileLockForPath:
-        _name = IBucket._validate_name(name)
+    def get_lock(self, name: PurePosixPath | str, only_existing=False) -> FileLockForPath:
+        name = IBucket._validate_name(name)  # pylint: disable=protected-access
         with self._lock_dict_lock:
             if name not in self._locks:
                 if only_existing:

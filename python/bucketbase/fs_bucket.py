@@ -6,6 +6,8 @@ from random import random
 from time import sleep, time, time_ns
 from typing import BinaryIO, Iterable, Optional, Union
 
+from streamerate import slist
+
 from bucketbase.errors import DeleteError
 from bucketbase.ibucket import (
     AbstractAppendOnlySynchronizedBucket,
@@ -14,7 +16,6 @@ from bucketbase.ibucket import (
     ShallowListing,
 )
 from bucketbase.named_lock_manager import FileLockManager
-from streamerate import slist
 
 
 class FSObjectStream(ObjectStream):
@@ -83,8 +84,8 @@ class FSBucket(IBucket):
             temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
             with temp_obj_path.open("wb") as f:
                 while chunk := stream.read(self.BUFFER_SIZE):
-                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written, since bottleneck is IO
-                    #       https://github.com/eSAMTrade/bucketbase/issues/134
+                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written,
+                    #       since bottleneck is IO: https://github.com/eSAMTrade/bucketbase/issues/134
                     f.write(chunk)
             self._try_rename_tmp_file(temp_obj_path, _object_path)
         except FileNotFoundError as exc:
@@ -212,7 +213,7 @@ class FSBucket(IBucket):
             p = self._root / obj
             try:
                 p.unlink(missing_ok=True)
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 delete_errors.append(DeleteError(code=404, message=e, name=str(obj)))
             else:
                 self._try_remove_empty_dirs(p)
@@ -240,12 +241,10 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         self._lock_manager = FileLockManager(locks_path)
 
     def _lock_object(self, name: PurePosixPath | str):
-        name = self._validate_name(name)
         lock = self._lock_manager.get_lock(name)
         lock.acquire()
 
     def _unlock_object(self, name: PurePosixPath | str):
-        name = self._validate_name(name)
         lock = self._lock_manager.get_lock(name, only_existing=True)
         lock.release()
 

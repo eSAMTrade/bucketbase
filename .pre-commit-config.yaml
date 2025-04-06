@@ -40,16 +40,6 @@ repos:
         files: ^python/
         args: [ "--rcfile=python/pyproject.toml" ]
 
-  - repo: local
-    hooks:
-      - id: prospector
-        files: ^python/
-        name: Python quality check
-        entry: prospector
-        language: python
-        types: [ python ]
-        exclude: ".*/tests/.*"
-        args: [ "--profile", "python/.prospector.yaml" ]
 
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     # Ruff version.
