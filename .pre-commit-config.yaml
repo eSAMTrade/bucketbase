@@ -22,22 +22,26 @@ repos:
     rev: 23.9.1 # Replace by any tag/version: https://github.com/psf/black/tags
     hooks:
       - id: black
+        files: ^python/
         language_version: python3 # Should be a command that runs python3.6+
 
   - repo: https://github.com/pycqa/isort
     rev: 5.12.0
     hooks:
       - id: isort
+        files: ^python/
         args: ["--profile", "black"]
 
   - repo: https://github.com/pycqa/pylint
     rev: v3.0.0a7
     hooks:
       - id: pylint
+        files: ^python/
 
   - repo: local
     hooks:
       - id: prospector
+        files: ^python/
         name: Python quality check
         entry: prospector
         language: python
@@ -49,9 +53,11 @@ repos:
     rev: 'v0.0.291'
     hooks:
       - id: ruff
+        files: ^python/
         args: [--exit-non-zero-on-fix] # don't use --fix as it corrupts the files
 
   - repo: https://github.com/kynan/nbstripout
     rev: 0.6.1
     hooks:
     - id: nbstripout
+      files: ^python/
