@@ -23,6 +23,7 @@ repos:
     hooks:
       - id: black
         files: ^python/
+        args: ['--config', 'python/pyproject.toml']
         language_version: python3 # Should be a command that runs python3.6+
 
   - repo: https://github.com/pycqa/isort
@@ -30,7 +31,7 @@ repos:
     hooks:
       - id: isort
         files: ^python/
-        args: ["--profile", "black"]
+        args: ["--profile", "black", "--config-root", "python/"]
 
   - repo: https://github.com/pycqa/pylint
     rev: v3.0.0a7
