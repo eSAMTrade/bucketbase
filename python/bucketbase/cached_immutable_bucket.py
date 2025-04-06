@@ -22,6 +22,12 @@ class CachedImmutableBucket(IBucket):
         self._main = main
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
+        """
+        Note: At the first sight it would seem that concurrent calls to get_object may lead to multiple simultaneous calls to put_from_bucket,
+            causing redundant fetches from the main bucket. But the put_from_bucket is synchronized, so only one thread will actually fetch the object from the main bucket,
+            and all the concurrent threads will wait for the first thread to complete the PUT operation, and would throw FileExistsError,
+            after which it's clear that the object is already in the cache.
+        """
         name_str = str(name)
         try:
             return self._cache.get_object(name)
@@ -33,6 +39,9 @@ class CachedImmutableBucket(IBucket):
             return self._cache.get_object(name)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
+        """
+        Note: read the note in `get_object()` for the explanation of the synchronization.
+        """
         name_str = str(name)
         try:
             return self._cache.get_object_stream(name)
