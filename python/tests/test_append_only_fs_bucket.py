@@ -5,8 +5,9 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 
-from bucketbase import MemoryBucket
 from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
+
+from bucketbase import MemoryBucket
 
 
 class TestAppendOnlyFSBucket(unittest.TestCase):
@@ -152,17 +153,17 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         self.assertTrue(lock_acquired[1], "The second thread should have acquired the lock after the first thread released it")
 
     def test_get_size(self):
-        bucket = AppendOnlyFSBucket(self.mem_base_bucket, self.locks_path)
+        bucket = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
         object_name = "test_object"
         content = b"test content"
+
+        with self.assertRaises(FileNotFoundError):
+            bucket.get_size("non_existent_object")
 
         bucket.put_object(object_name, content)
 
         size = bucket.get_size(object_name)
         self.assertEqual(size, len(content))
-
-        with self.assertRaises(FileNotFoundError):
-            bucket.get_size(f"non_existent_object")
 
     def test_exists(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
@@ -171,16 +172,3 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         self.assertFalse(bucket_in_test.exists(object_name))
         self.base_bucket.put_object(object_name, content)
         self.assertTrue(bucket_in_test.exists(object_name))
-
-    def test_get_size_write_to_tempdir_first(self):
-        bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
-        object_name = "test_object"
-        content = b"test content"
-
-        with self.assertRaises(FileNotFoundError):
-            bucket_in_test.get_size(object_name)
-
-        self.base_bucket.put_object(object_name, content)
-
-        size = bucket_in_test.get_size(object_name)
-        self.assertEqual(size, len(content))

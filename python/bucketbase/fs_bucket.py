@@ -3,29 +3,32 @@ import threading
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from random import random
-from time import time_ns, sleep, time
-from typing import  Iterable, Optional, Union, BinaryIO
+from time import sleep, time, time_ns
+from typing import BinaryIO, Iterable, Optional, Union
 
-from streamerate import slist
-
-from bucketbase import namedlock
 from bucketbase.errors import DeleteError
-from bucketbase.ibucket import ShallowListing, IBucket, AbstractAppendOnlySynchronizedBucket, ObjectStream
+from bucketbase.ibucket import (
+    AbstractAppendOnlySynchronizedBucket,
+    IBucket,
+    ObjectStream,
+    ShallowListing,
+)
+from bucketbase.named_lock_manager import FileLockManager
+from streamerate import slist
 
 
 class FSObjectStream(ObjectStream):
     def __init__(self, path: Path, name: PurePosixPath) -> None:
+        super().__init__(None, name)
         self._path = path
-        self._name = name
-        self._file = None
 
     def __enter__(self) -> BinaryIO:
-        self._file = self._path.open("rb")
-        return self._file
+        self._stream = self._path.open("rb")
+        return self._stream
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self._file.close()
-        self._file = None
+        self._stream.close()
+        self._stream = None
 
 
 class FSBucket(IBucket):
@@ -36,8 +39,9 @@ class FSBucket(IBucket):
     This directory will be used to store temporary files during the download process (for atomic rename operation), and the lock files.
     This directory will be created if it does not exist, and will be named as "$bucketbase.tmp".
     """
+
     BUFFER_SIZE = 128 * 1024  # ubuntu default readahead is 128k: cat /sys/block/<nvme>/queue/read_ahead_kb
-    BUCKETBASE_TMP_DIR_NAME = f"$bucketbase.tmp"  # this should contain an invalid S3 char
+    BUCKETBASE_TMP_DIR_NAME = "$bucketbase.tmp"  # this should contain an invalid S3 char
     TEMP_SEP = "#"  # this is an invalid S3 char
 
     def __init__(self, root: Path, timeout_ms: int = 5000) -> None:
@@ -215,7 +219,7 @@ class FSBucket(IBucket):
         return delete_errors
 
     def get_root(self) -> Path:
-        """ This is not part of the IBucket interface, but it's useful for multiple purposes. """
+        """This is not part of the IBucket interface, but it's useful for multiple purposes."""
         return self._root
 
     def get_size(self, name: PurePosixPath | str) -> int:
@@ -233,8 +237,7 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         """
         super().__init__(base)
         self._locks_path = locks_path
-        self._lock_manager = namedlock.FileLockManager(locks_path)
-
+        self._lock_manager = FileLockManager(locks_path)
 
     def _lock_object(self, name: PurePosixPath | str):
         name = self._validate_name(name)

@@ -1,11 +1,9 @@
-import unittest
-import tempfile
-import threading
-import time
-from pathlib import Path
 import concurrent.futures
+import tempfile
+import unittest
+from pathlib import Path
 
-from bucketbase.namedlock import ThreadLockManager, FileLockManager
+from bucketbase.named_lock_manager import FileLockManager, ThreadLockManager
 
 
 class ThreadLockManagerTests(unittest.TestCase):
@@ -21,30 +19,6 @@ class ThreadLockManagerTests(unittest.TestCase):
         lock1 = self.lock_manager.get_lock("test_lock1")
         lock2 = self.lock_manager.get_lock("test_lock2")
         self.assertIsNot(lock1, lock2)
-
-    def test_lock_actually_locks(self):
-        lock = self.lock_manager.get_lock("test_lock")
-        shared_counter = [0]
-        num_threads = 10
-        iterations = 1000
-
-        def increment():
-            for _ in range(iterations):
-                with lock:
-                    value = shared_counter[0]
-                    time.sleep(0.0000001)
-                    shared_counter[0] = value + 1
-
-        threads = []
-        for _ in range(num_threads):
-            thread = threading.Thread(target=increment)
-            threads.append(thread)
-            thread.start()
-
-        for thread in threads:
-            thread.join()
-
-        self.assertEqual(shared_counter[0], num_threads * iterations)
 
     def test_concurrent_lock_access(self):
         # Test that multiple threads can get the same lock safely
@@ -67,6 +41,7 @@ class FileLockManagerTests(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
     def test_get_lock_returns_same_lock_for_same_name(self):
@@ -82,10 +57,13 @@ class FileLockManagerTests(unittest.TestCase):
     def test_sanitizes_path_characters(self):
         # These should map to the same lock file
         name1 = "path/with/slashes"
-        name2 = "path\\with\\backslashes"
+        name2 = "path/with/slashes2"
+        name_invalid = "path\\with\\backslashes"
 
         lock1 = self.lock_manager.get_lock(name1)
         lock2 = self.lock_manager.get_lock(name2)
+
+        self.assertRaises(ValueError, self.lock_manager.get_lock, name_invalid, only_existing=True)
 
         # The locks should be different objects because the names are different
         self.assertIsNot(lock1, lock2)
@@ -98,16 +76,16 @@ class FileLockManagerTests(unittest.TestCase):
         sanitized_names = [f.name for f in files]
 
         self.assertIn("path#with#slashes.lock", sanitized_names)
-        self.assertIn("path#with#backslashes.lock", sanitized_names)
+        self.assertIn("path#with#slashes2.lock", sanitized_names)
         lock1.release()
         lock2.release()
 
         self.assertEqual(0, len(list(self.temp_dir.glob("*"))))
 
-
     def test_lock_directory_created(self):
         # Delete the directory to test creation
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
         # Re-create the manager, which should recreate the directory

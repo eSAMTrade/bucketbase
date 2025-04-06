@@ -1,48 +1,47 @@
 import io
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Union, BinaryIO
-
-from streamerate import slist
+from typing import BinaryIO, Iterable, Union
 
 from bucketbase.errors import DeleteError
 from bucketbase.fs_bucket import AppendOnlyFSBucket
-from bucketbase.ibucket import ShallowListing, IBucket, ObjectStream
-from bucketbase import namedlock
+from bucketbase.ibucket import (
+    AbstractAppendOnlySynchronizedBucket,
+    IBucket,
+    ObjectStream,
+    ShallowListing,
+)
+from pyxtension import validate
+from streamerate import slist
 
 
 class CachedImmutableBucket(IBucket):
-    def __init__(self, cache: IBucket, main: IBucket, lock_manager: namedlock.NamedLockManager = None) -> None:
+    def __init__(self, cache: AbstractAppendOnlySynchronizedBucket, main: IBucket) -> None:
+        validate(isinstance(cache, AbstractAppendOnlySynchronizedBucket), "cache must be an AbstractAppendOnlySynchronizedBucket", exc=TypeError)
+        validate(isinstance(main, IBucket), "main must be an IBucket", exc=TypeError)
         self._cache = cache
         self._main = main
-        self._lock_manager = lock_manager or namedlock.ThreadLockManager()
-
-    def _get_with_cache_fallback(self, name:PurePosixPath | str, get_cache_func, fetch_and_cache_func):
-        """Generic method for getting objects with cache fallback"""
-        name_str = str(name)
-        try:
-            return get_cache_func(name)
-        except FileNotFoundError:
-            with self._lock_manager.get_lock(name_str):
-                try:
-                    return get_cache_func(name)  # Check cache again within lock
-                except FileNotFoundError:
-                    return fetch_and_cache_func(name)
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
-        def fetch_and_cache(n):
-            content = self._main.get_object(n)
-            self._cache.put_object(n, content)
-            return content
-
-        return self._get_with_cache_fallback(name, self._cache.get_object, fetch_and_cache)
+        name_str = str(name)
+        try:
+            return self._cache.get_object(name)
+        except FileNotFoundError:
+            try:
+                self._cache.put_from_bucket(name, src_bucket=self._main, src_name=name_str)
+            except FileExistsError:
+                pass
+            return self._cache.get_object(name)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
-        def fetch_and_cache(n):
-            with self._main.get_object_stream(n) as stream:
-                self._cache.put_object_stream(n, stream)
-            return self._cache.get_object_stream(n)
-
-        return self._get_with_cache_fallback(name, self._cache.get_object_stream, fetch_and_cache)
+        name_str = str(name)
+        try:
+            return self._cache.get_object_stream(name)
+        except FileNotFoundError:
+            try:
+                self._cache.put_from_bucket(name, src_bucket=self._main, src_name=name_str)
+            except FileExistsError:
+                pass
+            return self._cache.get_object_stream(name)
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         raise io.UnsupportedOperation("put_object is not supported for CachedImmutableMinioObjectStorage")
