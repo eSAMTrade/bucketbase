@@ -12,9 +12,8 @@ from typing import BinaryIO, Union
 from unittest import TestCase
 from unittest.mock import Mock
 
-from bucketbase.ibucket import ObjectStream
-
 from bucketbase import AppendOnlyFSBucket, CachedImmutableBucket, IBucket, MemoryBucket
+from bucketbase.ibucket import ObjectStream
 
 loggerr = logging.getLogger(__name__)
 logging.basicConfig(level=logging.ERROR, format="%(message)s")
@@ -155,7 +154,6 @@ class TestConcurrentCachedImmutableBucket(unittest.TestCase):
         # Cleanup any temporary resources
         self.temp_dir.cleanup()
 
-    # @skip("This test is flaky and needs to be fixed")
     def test_concurrent_stream_access(self):
         temp_dir_path = Path(self.temp_dir.name)
         print(temp_dir_path)
