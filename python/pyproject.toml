@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bucketbase"
-version = "1.3.2"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
+version = "1.4.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
 authors = ["Andrei Suiu <andrei.suiu@gmail.com>"]
 repository = "https://github.com/asuiu/bucketbase"
@@ -10,8 +10,8 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0.0"
 requests = ">=2.25.1"
-streamerate = ">=1.0.5"
-pyxtension = ">=1.16.9"
+streamerate = ">=1.1.4"
+pyxtension = ">=1.17.1"
 StrEnum = ">=0.4.0"
 filelock= ">3.0.12"
 minio = { version = ">=7.2.4", optional = true }
@@ -61,6 +61,11 @@ ignore = ["E501"]
 # Allow autofix for all enabled rules (when `--fix`) is provided.
 fixable = ["A", "B", "C", "D", "E", "F"]
 unfixable = []
+
+[tool.isort]
+profile = "black"
+known_first_party = ["bucketbase"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 
 
 [tool.commitizen]

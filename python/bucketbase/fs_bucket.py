@@ -1,59 +1,93 @@
 import os
+import threading
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from threading import RLock
-from typing import Dict, Iterable, Optional, Union, BinaryIO
+from random import random
+from time import sleep, time, time_ns
+from typing import BinaryIO, Iterable, Optional, Union
 
 from streamerate import slist
 
 from bucketbase.errors import DeleteError
-from bucketbase.file_lock import FileLockForPath
-from bucketbase.ibucket import ShallowListing, IBucket, AbstractAppendOnlySynchronizedBucket, ObjectStream
+from bucketbase.ibucket import (
+    AbstractAppendOnlySynchronizedBucket,
+    IBucket,
+    ObjectStream,
+    ShallowListing,
+)
+from bucketbase.named_lock_manager import FileLockManager
 
 
 class FSObjectStream(ObjectStream):
     def __init__(self, path: Path, name: PurePosixPath) -> None:
+        super().__init__(None, name)
         self._path = path
-        self._name = name
-        self._file = None
 
     def __enter__(self) -> BinaryIO:
-        self._file = self._path.open("rb")
-        return self._file
+        self._stream = self._path.open("rb")
+        return self._stream
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self._file.close()
-        self._file = None
+        self._stream.close()
+        self._stream = None
 
 
 class FSBucket(IBucket):
     """
     Implements IObjectStorage interface, but stores all objects in local-mounted filesystem.
-    """
-    BUFFER_SIZE = 64 * 1024
 
-    def __init__(self, root: Path) -> None:
+    Please note that this class will add a temporary directory to the "root" directory passed to the constructor.
+    This directory will be used to store temporary files during the download process (for atomic rename operation), and the lock files.
+    This directory will be created if it does not exist, and will be named as "$bucketbase.tmp".
+    """
+
+    BUFFER_SIZE = 128 * 1024  # ubuntu default readahead is 128k: cat /sys/block/<nvme>/queue/read_ahead_kb
+    BUCKETBASE_TMP_DIR_NAME = "$bucketbase.tmp"  # this should contain an invalid S3 char
+    TEMP_SEP = "#"  # this is an invalid S3 char
+
+    def __init__(self, root: Path, timeout_ms: int = 5000) -> None:
+        """
+        :param root: the root directory of the bucket.
+        :param timeout_ms: the timeout in milliseconds for the atomic rename operation.
+        """
         assert isinstance(root, Path), f"root must be a Path, but got {type(root)}"
         if not root.exists():
             root.mkdir(parents=True, exist_ok=True)
         assert root.is_dir(), f"root must be a directory, but got {root}"
         self._root = root
+        self._timeout_ms = timeout_ms
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         stream = BytesIO(content) if isinstance(content, (bytes, bytearray)) else BytesIO(content.encode())
         self.put_object_stream(name, stream)
 
+    def _get_tmp_obj_path(self, name: PurePosixPath | str) -> Path:
+        tmp_obj_name = str(PurePosixPath(name)).replace(self.SEP, self.TEMP_SEP)
+        return self._root / self.BUCKETBASE_TMP_DIR_NAME / f"{tmp_obj_name}@{str(int(time_ns()))}-{threading.get_ident()}.tmp"
+
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
+        """
+        Stores an object with the given name using a stream as content source in a synchronized manner.
+        Prevents concurrent writes to the same object.
+
+        :param name: Name of the object to store
+        :param stream: Binary stream containing the object's content
+        :raises ValueError: If name is invalid
+        :raises io.UnsupportedOperation: If the object already exists
+        :raises IOError: If stream operations fail, or if the object atomic renaming times out due to high concurrency.
+        """
         _name = self._validate_name(name)
         _object_path = self._root / _name
+
+        temp_obj_path = self._get_tmp_obj_path(name)
         try:
-            _object_path.parent.mkdir(parents=True, exist_ok=True)
-            with _object_path.open("wb") as f:
-                while True:
-                    chunk = stream.read(self.BUFFER_SIZE)
-                    if not chunk:
-                        break
+            temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
+            with temp_obj_path.open("wb") as f:
+                while chunk := stream.read(self.BUFFER_SIZE):
+                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written,
+                    #       since bottleneck is IO: https://github.com/eSAMTrade/bucketbase/issues/134
                     f.write(chunk)
+            self._try_rename_tmp_file(temp_obj_path, _object_path)
         except FileNotFoundError as exc:
             if os.name == "nt":
                 if len(str(_object_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
@@ -62,6 +96,19 @@ class FSBucket(IBucket):
                         "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
                     ) from exc
             raise
+
+    def _try_rename_tmp_file(self, tmp_file_path: Path, object_path: Path) -> None:
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        timeout_ms = time() + self._timeout_ms / 1000
+
+        while time() < timeout_ms:
+            try:
+                os.replace(tmp_file_path, object_path)
+                return
+            except PermissionError:
+                # sleep between 50 and 100 ms
+                sleep(0.05 + 0.05 * random())
+        raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """
@@ -91,21 +138,36 @@ class FSBucket(IBucket):
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
         """
         Performs a deep/recursive listing of all objects with given prefix.
+        It will return the complete list of objects, even if they are in subdirectories, and even if the list is huge (it will perform pagination).
+
+        :param prefix: prefix of objects to list. prefix can be empty ("") and end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
         """
-        dir_path, _ = self._split_prefix(prefix)
-        s_prefix = str(prefix)
+        s_prefix = self._validate_prefix(prefix)
+
+        do_exclude_tmp_dir = s_prefix == ""  # since the tmp dir starts with invalid char, any prefix won't match it
+        dir_path, _ = self._split_prefix(s_prefix)
 
         start_list_lpath = self._root / dir_path
 
         # Here we do an optimization to avoid listing all files in the root of the ObjectStorage
         matching_objects = self._get_recurs_listing(start_list_lpath, s_prefix)
+
+        if do_exclude_tmp_dir:
+            return matching_objects.filter(lambda x: not x.as_posix().startswith(self.BUCKETBASE_TMP_DIR_NAME)).toList()
+
         return matching_objects
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
         """
         Performs a non-recursive listing of all objects with given prefix.
+        It will return a `ShallowListing` object, which contains a list of objects and a list of common prefixes (equivalent to directories on FileSystems).
+
+        :param prefix: prefix of objects to list. prefix can be empty ("")end with /, but use `str` as `PurePosixPath` will remove the trailing "/"
+        :raises ValueError: if the prefix is invalid
         """
-        dir_path, name_prefix = self._split_prefix(prefix)
+        s_prefix = self._validate_prefix(prefix)
+        dir_path, name_prefix = self._split_prefix(s_prefix)
         start_list_lpath = self._root / dir_path
 
         listing = start_list_lpath.glob(name_prefix + "*")
@@ -116,7 +178,9 @@ class FSBucket(IBucket):
                 obj_path = PurePosixPath(p.relative_to(self._root))
                 matching_objects.append(obj_path)
             elif p.is_dir():
-                dir_path = p.relative_to(self._root).as_posix() + "/"
+                dir_path = p.relative_to(self._root).as_posix() + self.SEP
+                if dir_path.startswith(self.BUCKETBASE_TMP_DIR_NAME):
+                    continue
                 prefixes.append(dir_path)
             else:
                 raise ValueError(f"Unexpected path type: {p}")
@@ -149,15 +213,18 @@ class FSBucket(IBucket):
             p = self._root / obj
             try:
                 p.unlink(missing_ok=True)
-            except Exception as e:
-                delete_errors.append(DeleteError(code=404, message=e, name=str(obj), version_id=None))
+            except Exception as e:  # pylint: disable=broad-except
+                delete_errors.append(DeleteError(code=404, message=e, name=str(obj)))
             else:
                 self._try_remove_empty_dirs(p)
         return delete_errors
 
     def get_root(self) -> Path:
-        """ This is not part of the IBucket interface, but it's useful for multiple purposes. """
+        """This is not part of the IBucket interface, but it's useful for multiple purposes."""
         return self._root
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        return os.stat(self._root / name).st_size
 
 
 class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
@@ -170,32 +237,19 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         The locks_path should be a local file system path with write permissions.
         """
         super().__init__(base)
-        self._locks: Dict[str, FileLockForPath] = {}
-        self._my_lock = RLock()
         self._locks_path = locks_path
+        self._lock_manager = FileLockManager(locks_path)
 
     def _lock_object(self, name: PurePosixPath | str):
-        name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, "$")
-        with self._my_lock:
-            if lock_object_name in self._locks:
-                file_lock = self._locks[lock_object_name]
-            else:
-                file_lock = FileLockForPath(self._locks_path / lock_object_name)
-                self._locks[lock_object_name] = file_lock
-        file_lock.acquire()
+        lock = self._lock_manager.get_lock(name)
+        lock.acquire()
 
     def _unlock_object(self, name: PurePosixPath | str):
-        name = self._validate_name(name)
-        lock_object_name = name.replace(self.SEP, "$")
-        with self._my_lock:
-            if lock_object_name not in self._locks:
-                raise RuntimeError(f"Object {name} is not locked")
-            file_lock = self._locks[lock_object_name]
-            file_lock.release()
+        lock = self._lock_manager.get_lock(name, only_existing=True)
+        lock.release()
 
     @classmethod
     def build(cls, root: Path, locks_path: Optional[Path] = None) -> "AppendOnlyFSBucket":
         if locks_path is None:
-            locks_path = root / "__locks__"
+            locks_path = root / FSBucket.BUCKETBASE_TMP_DIR_NAME / "__locks__"
         return cls(FSBucket(root), locks_path)

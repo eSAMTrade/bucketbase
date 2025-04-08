@@ -106,14 +106,21 @@ class IBucketTester:
         objects = self.storage.list_objects(PurePosixPath(f"{unique_dir}"))
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
-        expected_objects = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
-        self.test_case.assertListEqual(objects, expected_objects)
+        expected_objects_all = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
+        self.test_case.assertListEqual(objects, expected_objects_all)
 
         objects = self.storage.list_objects(f"{unique_dir}/")
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
         expected_objects = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt")]
         self.test_case.assertListEqual(objects, expected_objects)
+
+        # here we expect that on Minio there will be other dirs/objects, so we just check of our objects do exist
+        objects = self.storage.list_objects("")
+        self.test_case.assertIsInstance(objects, slist)
+        expected_objects_set = set(expected_objects_all)
+        real_objects_set = objects.toSet()
+        self.test_case.assertTrue(expected_objects_set.issubset(real_objects_set))
 
         # Invalid Prefix cases
         for prefix in self.INVALID_PREFIXES:
@@ -123,7 +130,7 @@ class IBucketTester:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
 
         objects = self.storage.list_objects(path_with2025_keys)
-        self.test_case.assertEquals(2025, objects.size())
+        self.test_case.assertEqual(2025, objects.size())
 
     def test_shallow_list_objects(self):
         unique_dir = f"dir{self.us}"
@@ -148,6 +155,13 @@ class IBucketTester:
         self.test_case.assertListEqual(shallow_listing.objects, expected_objects)
         self.test_case.assertEqual(shallow_listing.prefixes, expected_prefixes)
 
+        # here we expect that on Minio there will be other dirs/objects, since the bucket is shared, so we just check of our objects do exist
+        shallow_listing = self.storage.shallow_list_objects("")
+        expected_objects = {PurePosixPath(f"{unique_dir}file1.txt")}
+        expected_prefixes = {f"{unique_dir}/"}
+        self.test_case.assertTrue(expected_objects.issubset(shallow_listing.objects.toSet()))
+        self.test_case.assertTrue(expected_prefixes.issubset(shallow_listing.prefixes.toSet()))
+
         # Invalid Prefix cases
         for prefix in self.INVALID_PREFIXES:
             self.test_case.assertRaises(ValueError, self.storage.shallow_list_objects, prefix)
@@ -155,8 +169,8 @@ class IBucketTester:
     def test_shallow_list_objects_with_over1000keys(self):
         path_with2025_keys = self._ensure_dir_with_2025_keys()
         shallow_listing = self.storage.shallow_list_objects(path_with2025_keys)
-        self.test_case.assertEquals(2025, shallow_listing.objects.size())
-        self.test_case.assertEquals(0, shallow_listing.prefixes.size())
+        self.test_case.assertEqual(2025, shallow_listing.objects.size())
+        self.test_case.assertEqual(0, shallow_listing.prefixes.size())
 
     def test_exists(self):
         unique_dir = f"dir{self.us}"
@@ -200,3 +214,21 @@ class IBucketTester:
 
             stream(range(2025)).fastmap(upload_file, poolSize=100).to_list()
         return self.PATH_WITH_2025_KEYS
+
+    def test_get_size(self):
+        # Setup the test
+        unique_dir = f"dir{self.us}"
+        path1 = PurePosixPath(f"{unique_dir}/file1.txt")
+
+        content1 = b"Content 1"
+
+        self.storage.put_object(path1, content1)
+
+        self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
+        with self.test_case.assertRaises(FileNotFoundError):
+            self.storage.get_size(f"{unique_dir}/NOT.FOUND")
+
+        # update object -- new size
+        content1 = b"Content 1 -- modified"
+        self.storage.put_object(path1, content1)
+        self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
