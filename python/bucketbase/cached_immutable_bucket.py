@@ -1,33 +1,55 @@
 import io
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Union, BinaryIO
-
-from streamerate import slist
+from typing import BinaryIO, Iterable, Union
 
 from bucketbase.errors import DeleteError
 from bucketbase.fs_bucket import AppendOnlyFSBucket
-from bucketbase.ibucket import ShallowListing, IBucket, ObjectStream
+from bucketbase.ibucket import (
+    AbstractAppendOnlySynchronizedBucket,
+    IBucket,
+    ObjectStream,
+    ShallowListing,
+)
+from pyxtension import validate
+from streamerate import slist
 
 
 class CachedImmutableBucket(IBucket):
-    def __init__(self, cache: IBucket, main: IBucket) -> None:
+    def __init__(self, cache: AbstractAppendOnlySynchronizedBucket, main: IBucket) -> None:
+        validate(isinstance(cache, AbstractAppendOnlySynchronizedBucket), "cache must be an AbstractAppendOnlySynchronizedBucket", exc=TypeError)
+        validate(isinstance(main, IBucket), "main must be an IBucket", exc=TypeError)
         self._cache = cache
         self._main = main
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
+        """
+        Note: At the first sight it would seem that concurrent calls to get_object may lead to multiple simultaneous calls to put_from_bucket,
+            causing redundant fetches from the main bucket. But the put_from_bucket is synchronized, so only one thread will actually fetch the object from the main bucket,
+            and all the concurrent threads will wait for the first thread to complete the PUT operation, and would throw FileExistsError,
+            after which it's clear that the object is already in the cache.
+        """
+        name_str = str(name)
         try:
             return self._cache.get_object(name)
         except FileNotFoundError:
-            _content = self._main.get_object(name)
-            self._cache.put_object(name, _content)
-            return _content
+            try:
+                self._cache.put_from_bucket(name, src_bucket=self._main, src_name=name_str)
+            except FileExistsError:
+                pass
+            return self._cache.get_object(name)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
+        """
+        Note: read the note in `get_object()` for the explanation of the synchronization.
+        """
+        name_str = str(name)
         try:
             return self._cache.get_object_stream(name)
         except FileNotFoundError:
-            with self._main.get_object_stream(name) as stream:
-                self._cache.put_object_stream(name, stream)
+            try:
+                self._cache.put_from_bucket(name, src_bucket=self._main, src_name=name_str)
+            except FileExistsError:
+                pass
             return self._cache.get_object_stream(name)
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:

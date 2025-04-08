@@ -4,18 +4,18 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import PurePosixPath, Path
-from typing import Tuple, Optional, Union, Iterable, BinaryIO
+from pathlib import Path, PurePosixPath
+from typing import BinaryIO, Iterable, Optional, Tuple, Union
 
+from bucketbase.errors import DeleteError
 from pyxtension import PydanticValidated, validate
 from streamerate import slist
 from typing_extensions import Self
 
-from bucketbase.errors import DeleteError
-
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
 S3_NAME_CHARS_NO_SEP = r"\w!\-\.')("
+
 
 @dataclass(frozen=True)
 class ShallowListing:
@@ -23,8 +23,10 @@ class ShallowListing:
     :param objects: list of object names, as PurePosixPath
     :param prefixes: list of prefixes (equivalent to directories on FileSystems) as strings, ending with "/"
     """
+
     objects: slist[PurePosixPath]
     prefixes: slist[str]
+
 
 class ObjectStream:
     def __init__(self, stream: BinaryIO, name: PurePosixPath) -> None:
@@ -36,6 +38,7 @@ class ObjectStream:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self._stream.close()
+
 
 class IBucket(PydanticValidated, ABC):
     """
@@ -50,6 +53,7 @@ class IBucket(PydanticValidated, ABC):
     SEP = "/"
     SPLIT_PREFIX_RE = re.compile(rf"^((?:[{S3_NAME_CHARS_NO_SEP}]+/)*)([{S3_NAME_CHARS_NO_SEP}]*)$")
     OBJ_NAME_RE = re.compile(rf"^(?:[{S3_NAME_CHARS_NO_SEP}]+/)*[{S3_NAME_CHARS_NO_SEP}]+$")
+    PREFIX_RE = re.compile(rf"^(?:[{S3_NAME_CHARS_NO_SEP}]+/)*[{S3_NAME_CHARS_NO_SEP}]*$")
     DEFAULT_ENCODING = "utf-8"
     MINIO_PATH_TEMP_SUFFIX_LEN = 43  # Minio will add to any downloaded path a `stat.etag + '.part.minio'` suffix
     WINDOWS_MAX_PATH = 260
@@ -83,7 +87,7 @@ class IBucket(PydanticValidated, ABC):
         :return: Encoded content as bytes
         :raises ValueError: If content is not of type str, bytes or bytearray
         """
-        validate(isinstance(content, (str, bytes, bytearray)), f"content must be str, bytes or bytearray, but got {type(content)}")
+        validate(isinstance(content, (str, bytes, bytearray)), f"content must be str, bytes or bytearray, but got {type(content)}", exc=ValueError)
         return content if isinstance(content, (bytes, bytearray)) else content.encode(IBucket.DEFAULT_ENCODING)
 
     @staticmethod
@@ -98,8 +102,23 @@ class IBucket(PydanticValidated, ABC):
         """
         if isinstance(name, PurePosixPath):
             name = str(name)
-        validate(IBucket.OBJ_NAME_RE.match(name), f"Invalid S3 object name: {name}")
+        validate(IBucket.OBJ_NAME_RE.match(name), f"Invalid S3 object name: {name}", exc=ValueError)
         return name
+
+    @staticmethod
+    def _validate_prefix(prefix: PurePosixPath | str) -> str:
+        """
+        Validates the given prefix.
+        Throws ValueError if the prefix is invalid, thus this can be used to validate the prefix.
+
+        :param prefix: Prefix to validate
+        :return: Validated prefix as string
+        :raises ValueError: If the prefix is invalid
+        """
+        if isinstance(prefix, PurePosixPath):
+            prefix = str(prefix)
+        validate(IBucket.PREFIX_RE.match(prefix), f"Invalid S3 prefix: {prefix}", exc=ValueError)
+        return prefix
 
     @abstractmethod
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
@@ -250,7 +269,7 @@ class IBucket(PydanticValidated, ABC):
         """
         Copies all objects with given src_prefix to the dst_prefix, from self to dest_bucket.
         """
-        validate(threads > 0, "threads must be greater than 0")
+        validate(threads > 0, "threads must be greater than 0", exc=ValueError)
         src_objects = self.list_objects(src_prefix).to_list()
         if not isinstance(dst_prefix, str):
             dst_prefix = str(dst_prefix)
@@ -277,7 +296,7 @@ class IBucket(PydanticValidated, ABC):
         self.remove_prefix(src_prefix)
 
 
-class AbstractAppendOnlySynchronizedBucket(IBucket):
+class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
     """
     This class implements a synchronized, append-only bucket that wraps another bucket.
     It's useful for implementing a Bucket having a local FS cache and a remote storage, where the cache is shared between multiple processes,
@@ -312,14 +331,28 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
         """
         self._lock_object(name)
         try:
+            if self._base_bucket.exists(name):
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+            # we assume that the put_object operation is atomic
             self._base_bucket.put_object(name, content)
+        finally:
+            self._unlock_object(name)
+
+    def put_from_bucket(self, name: PurePosixPath | str, src_bucket: IBucket, src_name: PurePosixPath | str) -> None:
+        self._lock_object(name)
+        try:
+            if self._base_bucket.exists(name):
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+            # we assume that the put_object operation is atomic
+            with src_bucket.get_object_stream(src_name) as stream:
+                self._base_bucket.put_object_stream(name, stream)
         finally:
             self._unlock_object(name)
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         """
         Stores an object with the given name using a stream as content source in a synchronized manner.
-        Prevents concurrent writes to the same object.
+        Prevents concurrent writes to the same object, and ensures that the PUT happens only once, and only if the object doesn't exist.
 
         :param name: Name of the object to store
         :param stream: Binary stream containing the object's content
@@ -329,48 +362,39 @@ class AbstractAppendOnlySynchronizedBucket(IBucket):
         """
         self._lock_object(name)
         try:
+            if self._base_bucket.exists(name):
+                self._unlock_object(name)
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+                # we assume that the put_object_stream operation is atomic
             self._base_bucket.put_object_stream(name, stream)
         finally:
             self._unlock_object(name)
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """
-        Retrieves the content of an object in a synchronized manner.
-        Only locks if the object doesn't exist (to prevent race conditions during creation).
+        Retrieves the content of an object. Since the PUT operations are atomic, no synchronization is needed.
+        It throws an exception if the object doesn't exist.
 
         :param name: Name of the object to retrieve
         :return: Object content as bytes
         :raises FileNotFoundError: If the object is not found
         :raises ValueError: If name is invalid
         """
-        if self.exists(name):
-            return self._base_bucket.get_object(name)
-        self._lock_object(name)
-        try:
-            return self._base_bucket.get_object(name)
-        finally:
-            self._unlock_object(name)
-
-    def get_size(self, name: PurePosixPath | str) -> int:
-        return self._base_bucket.get_size(name)
+        return self._base_bucket.get_object(name)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         """
-        Retrieves a stream for reading the object's content in a synchronized manner.
-        Only locks if the object doesn't exist (to prevent race conditions during creation).
+        Retrieves a stream for reading the object's content. Since the PUT operations are atomic, no synchronization is needed.
 
         :param name: Name of the object to retrieve
         :return: ObjectStream instance for reading the content
         :raises FileNotFoundError: If the object is not found
         :raises ValueError: If name is invalid
         """
-        if self.exists(name):
-            return self._base_bucket.get_object_stream(name)
-        self._lock_object(name)
-        try:
-            return self._base_bucket.get_object_stream(name)
-        finally:
-            self._unlock_object(name)
+        return self._base_bucket.get_object_stream(name)
+
+    def get_size(self, name: PurePosixPath | str) -> int:
+        return self._base_bucket.get_size(name)
 
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
         """
