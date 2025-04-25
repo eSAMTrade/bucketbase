@@ -4,7 +4,7 @@ version = "1.4.0"  # do not edit manually. kept in sync with `tool.commitizen` c
 description = "bucketbase"
 authors = ["Andrei Suiu <andrei.suiu@gmail.com>"]
 repository = "https://github.com/asuiu/bucketbase"
-readme = "README.md"
+readme = "README.py.md"
 license = "MIT"
 
 [tool.poetry.dependencies]

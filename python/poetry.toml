@@ -2,5 +2,9 @@
 # You should rarely need to change this. See `pyproject.toml` for the primary project configuration.
 
 [virtualenvs]
-in-project = true
-virtualenvs.path = "./.venv"
+create = false  # Prevents Poetry from creating its own virtualenv
+in-project = false  # Disables the .venv in project directory
+prefer-active-python = true  # Uses the active Python interpreter (from Conda)
+
+[repositories]
+# If you need custom package repositories, add them here
