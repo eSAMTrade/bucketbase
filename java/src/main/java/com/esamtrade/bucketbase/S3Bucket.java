@@ -1,8 +1,10 @@
 package com.esamtrade.bucketbase;
 
+import com.amazonaws.SdkClientException;
 import org.apache.commons.codec.digest.DigestUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.core.sync.ResponseTransformer;
@@ -170,6 +172,24 @@ public class S3Bucket extends BaseBucket {
             return new ObjectStream(bufferedInputStream, name.toString());
         } catch (NoSuchKeyException e) {
             throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+        }
+    }
+
+    @Override
+    public long getSize(PurePosixPath name) throws IOException {
+        try {
+            HeadObjectRequest request = HeadObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(name.toString())
+                    .build();
+            HeadObjectResponse response = s3Client.headObject(request);
+            return response.contentLength();
+        }
+        catch (NoSuchKeyException e) {
+            throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+        }
+        catch (AwsServiceException | SdkClientException e) {
+            throw new IOException("Failed to get object size: " + name, e);
         }
     }
 

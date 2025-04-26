@@ -146,8 +146,9 @@ public class IBucketTester {
 
         ObjectStream objectStream = storage.getObjectStream(path);
         assertTrue(objectStream.getStream().markSupported());
+        long size = storage.getSize(path);
 
-        InputFile inFile = new ParquetUtils.StreamInputFile(objectStream);
+        InputFile inFile = new ParquetUtils.StreamInputFile(objectStream, size);
         try (ParquetFileReader reader = ParquetFileReader.open(inFile)) {
             int count = 0;
             // get actual file schema
@@ -166,6 +167,20 @@ public class IBucketTester {
             }
             assertEquals(3, count);
         }
+    }
+
+    public void testGetSize() throws IOException {
+        String uniqueDir = "dir" + uniqueSuffix;
+
+        // Binary content
+        PurePosixPath path = PurePosixPath.from(uniqueDir, "file1.bin");
+        byte[] bContent = "Test\ncontent".getBytes();
+        ByteArrayInputStream byteStream = new ByteArrayInputStream(bContent);
+        storage.putObjectStream(path, byteStream);
+
+        long size = storage.getSize(path);
+        assertEquals(bContent.length, size);
+        assertThrows(FileNotFoundException.class, () -> storage.getSize(new PurePosixPath(uniqueDir, "inexistent.txt")));
     }
 
     public void testListObjects() throws IOException {

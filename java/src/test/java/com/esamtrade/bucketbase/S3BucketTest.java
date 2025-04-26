@@ -47,6 +47,11 @@ class S3BucketTest {
     }
 
     @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
+    }
+
+    @Test
     void getListObjects() throws IOException {
         tester.testListObjects();
     }

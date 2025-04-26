@@ -32,6 +32,11 @@ class MemoryBucketTest {
     }
 
     @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
+    }
+
+    @Test
     void putObjectAndGetObjectStream() throws IOException {
         tester.testPutAndGetObjectStream();
     }

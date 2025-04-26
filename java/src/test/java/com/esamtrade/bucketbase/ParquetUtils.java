@@ -14,14 +14,16 @@ import java.nio.ByteBuffer;
 public class ParquetUtils {
     static class StreamInputFile implements InputFile {
         private final ObjectStream stream;
+        private final long length;
 
-        StreamInputFile(ObjectStream stream) {
+        StreamInputFile(ObjectStream stream, long length) {
             this.stream = stream;
+            this.length = length;
         }
 
         @Override
         public long getLength() throws IOException {
-            return stream.getStream().available();
+            return length;
         }
 
         @Override
@@ -33,14 +35,14 @@ public class ParquetUtils {
     public static class SeekableInputStreamWrapper extends SeekableInputStream {
         private final InputStream in;
         private long pos = 0;
-        private final int markLimit = 0;
+        private final int MARK_LIMIT = Integer.MAX_VALUE;
 
         /**
          * @param in the raw InputStream (e.g. S3ObjectInputStream)
          */
         public SeekableInputStreamWrapper(InputStream in) {
             this.in = in;
-            in.mark(markLimit);
+            in.mark(MARK_LIMIT);
 
         }
 
@@ -57,7 +59,7 @@ public class ParquetUtils {
             // if going backwards, reset to the mark and re‐mark
             if (newPos < pos) {
                 in.reset();
-                in.mark(markLimit);
+                in.mark(MARK_LIMIT);
                 pos = 0;
             }
             // skip forward to the desired position
