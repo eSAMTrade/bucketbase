@@ -1,11 +1,31 @@
 package com.esamtrade.bucketbase;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.column.page.PageReadStore;
+import org.apache.parquet.example.data.Group;
+import org.apache.parquet.example.data.simple.SimpleGroupFactory;
+import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.parquet.hadoop.example.ExampleParquetWriter;
+import org.apache.parquet.hadoop.example.GroupWriteSupport;
+import org.apache.parquet.io.ColumnIOFactory;
+import org.apache.parquet.io.InputFile;
+import org.apache.parquet.io.MessageColumnIO;
+import org.apache.parquet.io.RecordReader;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType;
+import org.apache.parquet.schema.Types;
+
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.IntStream;
@@ -111,6 +131,43 @@ public class IBucketTester {
         assertThrows(FileNotFoundException.class, () -> storage.getObjectStream(nonExistentPath));
     }
 
+    public void testPutAndGetParquetObjectStream() throws IOException {
+        MessageType schema = Types.buildMessage()
+                .required(PrimitiveType.PrimitiveTypeName.INT32).named("int_field")
+                .named("TestSchema");
+
+        String uniqueDir = "dir" + uniqueSuffix;
+
+        // Binary content
+        PurePosixPath path = PurePosixPath.from(uniqueDir, "file1.parquet");
+
+        InputStream inputStream = generateParquetOutput();
+        storage.putObjectStream(path, inputStream);
+
+        ObjectStream objectStream = storage.getObjectStream(path);
+        assertTrue(objectStream.getStream().markSupported());
+
+        InputFile inFile = new ParquetUtils.StreamInputFile(objectStream);
+        try (ParquetFileReader reader = ParquetFileReader.open(inFile)) {
+            int count = 0;
+            // get actual file schema
+            var metadata = reader.getFooter().getFileMetaData();
+            MessageType fileSchema = metadata.getSchema();
+            PageReadStore pages;
+            while ((pages = reader.readNextRowGroup()) != null) {
+                MessageColumnIO columnIO = new ColumnIOFactory()
+                        .getColumnIO(schema, fileSchema);
+                RecordReader<Group> rr = columnIO.getRecordReader(pages, new GroupRecordConverter(schema));
+                for (int i = 0, rows = (int) pages.getRowCount(); i < rows; i++) {
+                    Group g = rr.read();
+                    assertEquals(count, g.getInteger("int_field", 0));
+                    count++;
+                }
+            }
+            assertEquals(3, count);
+        }
+    }
+
     public void testListObjects() throws IOException {
         String uniqueDir = "dir" + uniqueSuffix;
         storage.putObject(PurePosixPath.from(uniqueDir, "file1.txt"), "Content 1".getBytes());
@@ -151,23 +208,22 @@ public class IBucketTester {
         List<PurePosixPath> existingKeys = storage.listObjects(pathWith2025Keys);
         if (existingKeys.isEmpty()) {
             // Create the directory and add 2025 files
-            try (ForkJoinPool customThreadPool = new ForkJoinPool(50)) {
-                try {
-                    customThreadPool.submit(() ->
-                                    IntStream.range(0, 2025).parallel().forEach(i -> {
-                                        try {
-                                            var path = pathWith2025Keys.join("file" + i + ".txt");
-                                            storage.putObject(path, ("Content " + i).getBytes());
-                                        } catch (IOException e) {
-                                            throw new RuntimeException(e);
-                                        }
-                                    })
-                                           ).get();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                } finally {
-                    customThreadPool.shutdown();
-                }
+            ForkJoinPool customThreadPool = new ForkJoinPool(50);
+            try {
+                customThreadPool.submit(() ->
+                    IntStream.range(0, 2025).parallel().forEach(i -> {
+                        try {
+                            var path = pathWith2025Keys.join("file" + i + ".txt");
+                            storage.putObject(path, ("Content " + i).getBytes());
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                ).get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                customThreadPool.shutdown();
             }
         }
         return pathWith2025Keys;
@@ -244,5 +300,44 @@ public class IBucketTester {
         ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPath(""));
         List<PurePosixPath> prefixes = shallowListing.getPrefixes();
         assertFalse(prefixes.contains(uniqueDir + "/"));
+    }
+
+    private InputStream generateParquetOutput() throws IOException {
+        MessageType schema = Types.buildMessage()
+                .required(PrimitiveType.PrimitiveTypeName.INT32).named("int_field")
+                .named("TestSchema");
+
+        // enable writing
+        Configuration conf = new Configuration();
+        GroupWriteSupport.setSchema(schema, conf);
+
+        int pipeBuffer = 4 * 1024 * 1024; // 4 MB internal buffer
+        PipedInputStream inputStreamToReturn  = new PipedInputStream(pipeBuffer);
+        PipedOutputStream pipedOutputStream = new PipedOutputStream(inputStreamToReturn);
+
+        // wrap pipe in our PositionOutputStream
+        ParquetUtils.PositionOutputStreamWrapper posOutStream = new ParquetUtils.PositionOutputStreamWrapper(pipedOutputStream);
+        ParquetUtils.OutputFileWrapper OutputFileWrapper = new ParquetUtils.OutputFileWrapper(posOutStream);
+
+        // start a thread to write Parquet into the pipe
+        Thread writerThread = new Thread(() -> {
+            try (ParquetWriter<Group> writer = ExampleParquetWriter
+                    .builder(OutputFileWrapper)
+                    .withConf(conf)
+                    .withWriteMode(org.apache.parquet.hadoop.ParquetFileWriter.Mode.OVERWRITE)
+                    .withType(schema)
+                    .build()) {
+
+                SimpleGroupFactory factory = new SimpleGroupFactory(schema);
+                for (int i = 0; i < 3; i++) {
+                    writer.write(factory.newGroup().append("int_field", i));
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        writerThread.start();
+
+        return inputStreamToReturn;
     }
 }

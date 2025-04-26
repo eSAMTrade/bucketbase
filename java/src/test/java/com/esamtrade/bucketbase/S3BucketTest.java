@@ -42,6 +42,11 @@ class S3BucketTest {
     }
 
     @Test
+    void testPutAndGetParquetObjectStream() throws IOException {
+        tester.testPutAndGetParquetObjectStream();
+    }
+
+    @Test
     void getListObjects() throws IOException {
         tester.testListObjects();
     }

@@ -27,6 +27,11 @@ class MemoryBucketTest {
     }
 
     @Test
+    void testPutAndGetParquetObjectStream() throws IOException {
+        tester.testPutAndGetParquetObjectStream();
+    }
+
+    @Test
     void putObjectAndGetObjectStream() throws IOException {
         tester.testPutAndGetObjectStream();
     }

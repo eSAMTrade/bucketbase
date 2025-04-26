@@ -11,6 +11,7 @@ import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 
+import java.io.BufferedInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,20 +25,26 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 public class S3Bucket extends BaseBucket {
-
+    private final static int DEFAULT_BUF_SIZE = 8 * 1024;
+    protected final int BUF_SIZE; // 8 KB by default
     protected S3Client s3Client;
     protected S3AsyncClient s3AsyncClient;
     protected String bucketName;
 
 
-    public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName) {
+    public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName, int bufSize) {
         this.s3Client = s3Client;
         this.s3AsyncClient = s3AsyncClient;
         this.bucketName = bucketName;
+        this.BUF_SIZE = bufSize;
     }
 
     public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName) {
-        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName);
+        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName, DEFAULT_BUF_SIZE);
+    }
+
+    public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName, int bufSize) {
+        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName, bufSize);
     }
 
     private static S3Client createS3Client(String endpoint, String accessKey, String secretKey) {
@@ -159,12 +166,12 @@ public class S3Bucket extends BaseBucket {
                     .key(name.toString())
                     .build();
             InputStream inputStream = s3Client.getObject(request, ResponseTransformer.toInputStream());
-            return new ObjectStream(inputStream, name.toString());
+            BufferedInputStream bufferedInputStream = new BufferedInputStream(inputStream, BUF_SIZE);
+            return new ObjectStream(bufferedInputStream, name.toString());
         } catch (NoSuchKeyException e) {
             throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
         }
     }
-
 
     @Override
     /**
