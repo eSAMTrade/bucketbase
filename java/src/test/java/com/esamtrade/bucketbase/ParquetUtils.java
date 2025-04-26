@@ -81,14 +81,6 @@ public class ParquetUtils {
         }
 
         @Override
-        public int read(byte[] b, int off, int len) throws IOException {
-            int n = in.read(b, off, len);
-            if (n > 0)
-                pos += n;
-            return n;
-        }
-
-        @Override
         public void readFully(byte[] b, int off, int len) throws IOException {
             int total = 0;
             while (total < len) {
@@ -143,12 +135,6 @@ public class ParquetUtils {
         public void write(int b) throws IOException {
             out.write(b);
             pos++;
-        }
-
-        @Override
-        public void write(byte[] b, int off, int len) throws IOException {
-            out.write(b, off, len);
-            pos += len;
         }
 
         @Override
