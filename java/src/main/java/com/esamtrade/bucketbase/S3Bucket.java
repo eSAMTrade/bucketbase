@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
@@ -28,6 +29,7 @@ import java.util.stream.Collectors;
 
 public class S3Bucket extends BaseBucket {
     private final static int DEFAULT_BUF_SIZE = 8 * 1024;
+    private final static int DEFAULT_UPLOAD_PART_SIZE = 5 * 1024 * 1024;
     protected final int BUF_SIZE; // 8 KB by default
     protected S3Client s3Client;
     protected S3AsyncClient s3AsyncClient;
@@ -79,26 +81,40 @@ public class S3Bucket extends BaseBucket {
     }
 
     @Override
-    public void putObjectStream(PurePosixPath name, InputStream stream) {
+    public void putObjectStream(PurePosixPath name, InputStream stream) throws IOException {
         String _name = validateName(name);
         try {
             uploadLargeStream(_name, stream);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to upload object: " + _name, e);
+            throw new IOException("Failed to upload object: " + _name, e);
         } finally {
             s3AsyncClient.close();
         }
     }
 
 
-    private void uploadLargeStream(String key, InputStream inputStream) {
-        int partSize = 5 * 1024 * 1024; // 5 MB
+    private void uploadLargeStream(String key, InputStream inputStream) throws IOException {
+        // Please note, that if the input stream will have less than 5MB, the S3 multipart upload throws 400 code (upload is smaller than the minimum allowed object size)
         List<CompletedPart> completedParts = new ArrayList<>();
-        byte[] buffer = new byte[partSize];
+        byte[] buffer = new byte[DEFAULT_UPLOAD_PART_SIZE];
         int bytesRead;
         int partNumber = 1;
 
-        // 1. Initiate the multipart upload
+        bytesRead = readUploadBuffer(inputStream, buffer);
+        if (bytesRead == 0) {
+            // Empty stream, create empty object
+            this.putObject(PurePosixPath.from(key), new byte[0]);
+            return;
+        }
+
+        if (bytesRead < DEFAULT_UPLOAD_PART_SIZE) {
+            byte[] content = Arrays.copyOf(buffer, bytesRead);
+            // Small file, use regular putObject to avoid multipart upload being rejected
+            this.putObject(PurePosixPath.from(key), content);
+            return;
+        }
+
+        // 1. Initiate the multipart upload for large files
         CreateMultipartUploadRequest createMultipartUploadRequest = CreateMultipartUploadRequest.builder()
                 .bucket(bucketName)
                 .key(key)
@@ -107,22 +123,16 @@ public class S3Bucket extends BaseBucket {
         String uploadId = response.uploadId();
 
         try {
-            // 2. Read the input stream and upload each part
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                byte[] bytesToUpload = (bytesRead < partSize) ? java.util.Arrays.copyOf(buffer, bytesRead) : buffer;
-                UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
-                        .bucket(bucketName)
-                        .key(key)
-                        .uploadId(uploadId)
-                        .partNumber(partNumber)
-                        .contentLength((long) bytesRead)
-                        .build();
-                AsyncRequestBody requestBody = AsyncRequestBody.fromBytes(bytesToUpload);
-                CompletableFuture<UploadPartResponse> uploadPartResponse = s3AsyncClient.uploadPart(uploadPartRequest, requestBody);
-                completedParts.add(CompletedPart.builder()
-                        .partNumber(partNumber)
-                        .eTag(uploadPartResponse.join().eTag())
-                        .build());
+            // Upload the first buffer we already read
+            CompletedPart firstPart = uploadPart(key, uploadId, partNumber, bytesRead, buffer);
+            completedParts.add(firstPart);
+            partNumber++;
+
+            // 2. Continue reading and uploading remaining parts
+            while ((bytesRead = readUploadBuffer(inputStream, buffer)) != 0) {
+                byte[] bytesToUpload = (bytesRead < DEFAULT_UPLOAD_PART_SIZE) ? java.util.Arrays.copyOf(buffer, bytesRead) : buffer;
+                CompletedPart completedPart = uploadPart(key, uploadId, partNumber, bytesRead, bytesToUpload);
+                completedParts.add(completedPart);
                 partNumber++;
             }
 
@@ -142,8 +152,41 @@ public class S3Bucket extends BaseBucket {
                     .uploadId(uploadId)
                     .build();
             s3AsyncClient.abortMultipartUpload(abortMultipartUploadRequest).join();
-            throw new RuntimeException("Failed to upload object: " + key, e);
+            throw new IOException("Failed to upload object: " + key, e);
         }
+    }
+
+    private int readUploadBuffer(InputStream inputStream, byte[] buffer) throws IOException {
+        int totalBytesRead = inputStream.read(buffer);
+
+        if (totalBytesRead == -1) {
+            return 0;
+        }
+
+        if (totalBytesRead < DEFAULT_UPLOAD_PART_SIZE) {
+            int bytesRead;
+            while (totalBytesRead < DEFAULT_UPLOAD_PART_SIZE && (bytesRead = inputStream.read(buffer, totalBytesRead, DEFAULT_UPLOAD_PART_SIZE - totalBytesRead)) != -1) {
+                totalBytesRead += bytesRead;
+            }
+        }
+
+        return totalBytesRead;
+    }
+
+    private CompletedPart uploadPart(String key, String uploadId, int partNumber, long bytesRead, byte[] bytesToUpload) {
+        UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
+                .bucket(bucketName)
+                .key(key)
+                .uploadId(uploadId)
+                .partNumber(partNumber)
+                .contentLength(bytesRead)
+                .build();
+        AsyncRequestBody requestBody = AsyncRequestBody.fromBytes(bytesToUpload);
+        CompletableFuture<UploadPartResponse> uploadPartResponse = s3AsyncClient.uploadPart(uploadPartRequest, requestBody);
+        return CompletedPart.builder()
+                .partNumber(partNumber)
+                .eTag(uploadPartResponse.join().eTag())
+                .build();
     }
 
 
@@ -184,16 +227,13 @@ public class S3Bucket extends BaseBucket {
                     .build();
             HeadObjectResponse response = s3Client.headObject(request);
             return response.contentLength();
-        }
-        catch (NoSuchKeyException e) {
+        } catch (NoSuchKeyException e) {
             throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
-        }
-        catch (AwsServiceException | SdkClientException e) {
+        } catch (AwsServiceException | SdkClientException e) {
             throw new IOException("Failed to get object size: " + name, e);
         }
     }
 
-    @Override
     /**
      * Lists all objects in the S3 bucket with the given prefix.
      *
@@ -202,17 +242,15 @@ public class S3Bucket extends BaseBucket {
      * @param prefix The prefix to filter objects by.
      * @return A list of paths to the objects in the bucket.
      */
+    @Override
     public List<PurePosixPath> listObjects(PurePosixPath prefix) {
         splitPrefix(prefix); // validate prefix
-        List<PurePosixPath> result = new ArrayList<>();
         ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
                 .prefix(prefix.toString())
                 .build();
 
-        List<PurePosixPath> results = s3Client.listObjectsV2Paginator(request).contents().stream().map(S3Object::key).map(PurePosixPath::from).toList();
-
-        return results;
+        return s3Client.listObjectsV2Paginator(request).contents().stream().map(S3Object::key).map(PurePosixPath::from).toList();
     }
 
     @Override
