@@ -248,6 +248,7 @@ public class IBucketTester {
         List<PurePosixPath> existingKeys = storage.listObjects(pathWith2025Keys);
         if (existingKeys.isEmpty()) {
             // Create the directory and add 2025 files
+            @SuppressWarnings("resource")
             ForkJoinPool customThreadPool = new ForkJoinPool(50);
             try {
                 customThreadPool.submit(() ->
