@@ -191,7 +191,7 @@ class FSBucket(IBucket):
         _obj_path = self._root / _name
         return _obj_path.exists() and _obj_path.is_file()
 
-    def _try_remove_empty_dirs(self, p):
+    def _try_remove_empty_dirs(self, p: Path) -> None:
         dir_to_remove = p.parent
         while dir_to_remove.relative_to(self._root).parts:
             try:
@@ -240,11 +240,11 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         self._locks_path = locks_path
         self._lock_manager = FileLockManager(locks_path)
 
-    def _lock_object(self, name: PurePosixPath | str):
+    def _lock_object(self, name: PurePosixPath | str) -> None:
         lock = self._lock_manager.get_lock(name)
         lock.acquire()
 
-    def _unlock_object(self, name: PurePosixPath | str):
+    def _unlock_object(self, name: PurePosixPath | str) -> None:
         lock = self._lock_manager.get_lock(name, only_existing=True)
         lock.release()
 
