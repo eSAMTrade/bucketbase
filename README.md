@@ -76,7 +76,7 @@ dest_bucket = MinioBucket(endpoint="localhost:9000", access_key="minioadmin", se
 bucket.put_object("greet.txt", "Hello, Minio!")
 
 bucket.copy_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="copy_dir/")
-bucket.move_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="move_dir/")                   
+bucket.move_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="move_dir/")
 ```
 
 ### Using Synchronized Append-Only Storage
@@ -162,7 +162,7 @@ The code in this project is licensed under MIT license.
 ##### 1.1.0 (breaking changes)
 
 - IBucket rename: get_object_content() -> get_object()
-- IBucket.fput_oject() rename arg: destination -> file_path
+- IBucket.fput_object() rename arg: destination -> file_path
 
 ##### 1.0.1
 
