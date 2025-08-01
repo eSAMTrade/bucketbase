@@ -1,5 +1,4 @@
 import os
-import sys
 from pathlib import Path
 
 import filelock
@@ -20,9 +19,9 @@ class FileLockForPath(filelock.FileLock):
         return super()._acquire()
 
     def _release(self):
-        if sys.platform.startswith("darwin"):
-            try:
-                os.remove(self._lock_file_path)
-            except OSError:
-                pass
+        """Release the lock and remove the underlying lock file if present."""
+        try:
+            os.remove(self._lock_file_path)
+        except OSError:
+            pass
         return super()._release()

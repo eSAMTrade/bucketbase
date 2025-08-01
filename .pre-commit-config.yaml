@@ -28,6 +28,7 @@ repos:
           'pandas-stubs>=2.0.0',
           'types-requests',
         ]
+        files: ^python/bucketbase/
         args: [
           --ignore-missing-imports,
           --disallow-untyped-defs,

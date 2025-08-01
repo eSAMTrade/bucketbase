@@ -24,7 +24,7 @@ class IBucketTester:
     def cleanup(self):
         self.storage.remove_prefix(f"dir{self.us}")
 
-    def test_put_and_get_object(self):
+    def test_put_and_get_object(self) -> None:
         unique_dir = f"dir{self.us}"
         # binary content
         path = PurePosixPath(f"{unique_dir}/file1.bin")
@@ -58,11 +58,11 @@ class IBucketTester:
         path = f"{unique_dir}/inexistent.txt"
         self.test_case.assertRaises(FileNotFoundError, self.storage.get_object, path)
 
-    def validated_put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
-        assert isinstance(stream, io.IOBase), f"stream must be a BinaryIO, but got {type(stream)}"
-        return self.storage.put_object_stream(name, stream)
+    def validated_put_object_stream(self, name: PurePosixPath | str, data_stream: BinaryIO) -> None:
+        assert isinstance(data_stream, io.IOBase), f"stream must be a BinaryIO, but got {type(data_stream)}"
+        return self.storage.put_object_stream(name, data_stream)
 
-    def test_put_and_get_object_stream(self):
+    def test_put_and_get_object_stream(self) -> None:
         unique_dir = f"dir{self.us}"
         # binary content
         path = PurePosixPath(f"{unique_dir}/file1.bin")
@@ -72,15 +72,15 @@ class IBucketTester:
 
         self.validated_put_object_stream(path, gzipped_stream)
         with self.storage.get_object_stream(path) as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = [file.readline() for _ in range(3)]
-        self.test_case.assertEqual(result, ['Test\n', 'content', ''])
+        self.test_case.assertEqual(result, ["Test\n", "content", ""])
 
         # string path
         path = f"{unique_dir}/file1.bin"
         retrieved_content = self.storage.get_object_stream(path)
         with retrieved_content as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = file.read()
         self.test_case.assertEqual(result, "Test\ncontent")
 
@@ -90,7 +90,7 @@ class IBucketTester:
             self.validated_put_object_stream(path_out, file)
 
         with self.storage.get_object_stream(path_out) as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = file.read()
                 self.test_case.assertEqual(result, "Test\ncontent")
 
@@ -98,7 +98,7 @@ class IBucketTester:
         path = f"{unique_dir}/inexistent.txt"
         self.test_case.assertRaises(FileNotFoundError, self.storage.get_object_stream, path)
 
-    def test_list_objects(self):
+    def test_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"
         self.storage.put_object(PurePosixPath(f"{unique_dir}/file1.txt"), b"Content 1")
         self.storage.put_object(PurePosixPath(f"{unique_dir}/dir2/file2.txt"), b"Content 2")
@@ -106,7 +106,11 @@ class IBucketTester:
         objects = self.storage.list_objects(PurePosixPath(f"{unique_dir}"))
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
-        expected_objects_all = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
+        expected_objects_all = [
+            PurePosixPath(f"{unique_dir}/dir2/file2.txt"),
+            PurePosixPath(f"{unique_dir}/file1.txt"),
+            PurePosixPath(f"{unique_dir}file1.txt"),
+        ]
         self.test_case.assertListEqual(objects, expected_objects_all)
 
         objects = self.storage.list_objects(f"{unique_dir}/")
@@ -126,13 +130,13 @@ class IBucketTester:
         for prefix in self.INVALID_PREFIXES:
             self.test_case.assertRaises(ValueError, self.storage.list_objects, prefix)
 
-    def test_list_objects_with_over1000keys(self):
+    def test_list_objects_with_over1000keys(self) -> None:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
 
         objects = self.storage.list_objects(path_with2025_keys)
         self.test_case.assertEqual(2025, objects.size())
 
-    def test_shallow_list_objects(self):
+    def test_shallow_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"
         self.storage.put_object(PurePosixPath(f"{unique_dir}/file1.txt"), b"Content 1")
         self.storage.put_object(PurePosixPath(f"{unique_dir}/dir2/file2.txt"), b"Content 2")
@@ -157,22 +161,22 @@ class IBucketTester:
 
         # here we expect that on Minio there will be other dirs/objects, since the bucket is shared, so we just check of our objects do exist
         shallow_listing = self.storage.shallow_list_objects("")
-        expected_objects = {PurePosixPath(f"{unique_dir}file1.txt")}
-        expected_prefixes = {f"{unique_dir}/"}
-        self.test_case.assertTrue(expected_objects.issubset(shallow_listing.objects.toSet()))
-        self.test_case.assertTrue(expected_prefixes.issubset(shallow_listing.prefixes.toSet()))
+        expected_obj_set = {PurePosixPath(f"{unique_dir}file1.txt")}
+        expected_prefix_set = {f"{unique_dir}/"}
+        self.test_case.assertTrue(expected_obj_set.issubset(set(shallow_listing.objects)))
+        self.test_case.assertTrue(expected_prefix_set.issubset(set(shallow_listing.prefixes)))
 
         # Invalid Prefix cases
         for prefix in self.INVALID_PREFIXES:
             self.test_case.assertRaises(ValueError, self.storage.shallow_list_objects, prefix)
 
-    def test_shallow_list_objects_with_over1000keys(self):
+    def test_shallow_list_objects_with_over1000keys(self) -> None:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
         shallow_listing = self.storage.shallow_list_objects(path_with2025_keys)
         self.test_case.assertEqual(2025, shallow_listing.objects.size())
         self.test_case.assertEqual(0, shallow_listing.prefixes.size())
 
-    def test_exists(self):
+    def test_exists(self) -> None:
         unique_dir = f"dir{self.us}"
         path = PurePosixPath(f"{unique_dir}/file.txt")
         self.storage.put_object(path, b"Content")
@@ -180,7 +184,7 @@ class IBucketTester:
         self.test_case.assertFalse(self.storage.exists(f"{unique_dir}"))
         self.test_case.assertRaises(ValueError, self.storage.exists, f"{unique_dir}/")
 
-    def test_remove_objects(self):
+    def test_remove_objects(self) -> None:
         # Setup the test
         unique_dir = f"dir{self.us}"
         path1 = PurePosixPath(f"{unique_dir}/file1.txt")
@@ -207,7 +211,8 @@ class IBucketTester:
     def _ensure_dir_with_2025_keys(self) -> str:
         existing_keys = self.storage.list_objects(self.PATH_WITH_2025_KEYS)
         if not existing_keys:
-            def upload_file(i):
+
+            def upload_file(i: int) -> None:
                 path = PurePosixPath(self.PATH_WITH_2025_KEYS) / f"file{i}.txt"
                 content = f"Content {i}".encode("utf-8")
                 self.storage.put_object(path, content)
@@ -215,7 +220,7 @@ class IBucketTester:
             stream(range(2025)).fastmap(upload_file, poolSize=100).to_list()
         return self.PATH_WITH_2025_KEYS
 
-    def test_get_size(self):
+    def test_get_size(self) -> None:
         # Setup the test
         unique_dir = f"dir{self.us}"
         path1 = PurePosixPath(f"{unique_dir}/file1.txt")
