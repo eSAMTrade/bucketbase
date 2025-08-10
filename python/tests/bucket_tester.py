@@ -5,6 +5,8 @@ from pathlib import PurePosixPath
 from typing import BinaryIO
 from unittest import TestCase
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from streamerate import slist, stream
 from tsx import iTSms
 
@@ -72,15 +74,15 @@ class IBucketTester:
 
         self.validated_put_object_stream(path, gzipped_stream)
         with self.storage.get_object_stream(path) as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = [file.readline() for _ in range(3)]
-        self.test_case.assertEqual(result, ['Test\n', 'content', ''])
+        self.test_case.assertEqual(result, ["Test\n", "content", ""])
 
         # string path
         path = f"{unique_dir}/file1.bin"
         retrieved_content = self.storage.get_object_stream(path)
         with retrieved_content as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = file.read()
         self.test_case.assertEqual(result, "Test\ncontent")
 
@@ -90,7 +92,7 @@ class IBucketTester:
             self.validated_put_object_stream(path_out, file)
 
         with self.storage.get_object_stream(path_out) as file:
-            with gzip.open(file, 'rt') as file:
+            with gzip.open(file, "rt") as file:
                 result = file.read()
                 self.test_case.assertEqual(result, "Test\ncontent")
 
@@ -106,7 +108,11 @@ class IBucketTester:
         objects = self.storage.list_objects(PurePosixPath(f"{unique_dir}"))
         objects.sort()
         self.test_case.assertIsInstance(objects, slist)
-        expected_objects_all = [PurePosixPath(f"{unique_dir}/dir2/file2.txt"), PurePosixPath(f"{unique_dir}/file1.txt"), PurePosixPath(f"{unique_dir}file1.txt")]
+        expected_objects_all = [
+            PurePosixPath(f"{unique_dir}/dir2/file2.txt"),
+            PurePosixPath(f"{unique_dir}/file1.txt"),
+            PurePosixPath(f"{unique_dir}file1.txt"),
+        ]
         self.test_case.assertListEqual(objects, expected_objects_all)
 
         objects = self.storage.list_objects(f"{unique_dir}/")
@@ -207,6 +213,7 @@ class IBucketTester:
     def _ensure_dir_with_2025_keys(self) -> str:
         existing_keys = self.storage.list_objects(self.PATH_WITH_2025_KEYS)
         if not existing_keys:
+
             def upload_file(i):
                 path = PurePosixPath(self.PATH_WITH_2025_KEYS) / f"file{i}.txt"
                 content = f"Content {i}".encode("utf-8")
@@ -232,3 +239,128 @@ class IBucketTester:
         content1 = b"Content 1 -- modified"
         self.storage.put_object(path1, content1)
         self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
+
+    def test_open_multipart_sink(self):
+        """Test the open_multipart_sink method functionality."""
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
+        test_content = b"Test content for multipart upload"
+
+        # Test basic functionality
+        with self.storage.open_multipart_sink(path) as sink:
+            sink.write(test_content)
+
+        # Verify the object was stored correctly
+        retrieved_content = self.storage.get_object(path)
+        self.test_case.assertEqual(retrieved_content, test_content)
+
+        # Test with larger content written in chunks
+        path2 = PurePosixPath(f"{unique_dir}/multipart_large.txt")
+        chunk1 = b"First chunk of data. "
+        chunk2 = b"Second chunk of data. "
+        chunk3 = b"Third and final chunk."
+        expected_content = chunk1 + chunk2 + chunk3
+
+        with self.storage.open_multipart_sink(path2) as sink:
+            sink.write(chunk1)
+            sink.write(chunk2)
+            sink.write(chunk3)
+
+        retrieved_content = self.storage.get_object(path2)
+        self.test_case.assertEqual(retrieved_content, expected_content)
+
+        # Test that the object exists and has correct size
+        self.test_case.assertTrue(self.storage.exists(path2))
+        self.test_case.assertEqual(self.storage.get_size(path2), len(expected_content))
+
+        # Test with string path
+        path3 = f"{unique_dir}/multipart_string_path.txt"
+        string_content = b"Content written using string path"
+
+        with self.storage.open_multipart_sink(path3) as sink:
+            sink.write(string_content)
+
+        retrieved_content = self.storage.get_object(path3)
+        self.test_case.assertEqual(retrieved_content, string_content)
+
+    def test_open_multipart_sink_with_parquet(self):
+        """Test the open_multipart_sink method with pyarrow parquet files using multiple batches."""
+        unique_dir = f"dir{self.us}"
+        parquet_path = PurePosixPath(f"{unique_dir}/test_data.parquet")
+
+        # Define schema for our test data
+        schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("value", pa.float64()), ("active", pa.bool_()), ("timestamp", pa.timestamp("ms"))])
+
+        # Generate test data in 10 batches of 3 records each (or larger for multipart testing)
+        batches = []
+        # For MinioBucket with small PART_SIZE, use larger batches to trigger multipart upload
+        # Check if this is a MinioBucket by looking at the class name
+        is_minio = "MinioBucket" in str(type(self.storage))
+        batch_size = 200000 if is_minio else 3  # 200k records per batch for minio, 3 for others
+        num_batches = 10 if not is_minio else 3  # 10 batches for others, 3 for minio
+
+        for batch_num in range(num_batches):
+            batch_data = {
+                "id": [batch_num * batch_size + i for i in range(batch_size)],
+                "name": [f"item_{batch_num}_{i}" * (10 if is_minio else 1) for i in range(batch_size)],  # Longer strings for minio
+                "value": [batch_num * 10.5 + i * 1.1 for i in range(batch_size)],
+                "active": [(batch_num * batch_size + i) % 2 == 0 for i in range(batch_size)],
+                "timestamp": [pa.scalar(1640995200000 + batch_num * 1000 + i * 100, type=pa.timestamp("ms")) for i in range(batch_size)],
+            }
+            batch = pa.record_batch(batch_data, schema=schema)
+            batches.append(batch)
+
+        # Write parquet file using open_multipart_sink
+        with self.storage.open_multipart_sink(parquet_path) as sink:
+            arrow_sink = pa.output_stream(sink)
+            with pq.ParquetWriter(arrow_sink, schema) as writer:
+                for batch in batches:
+                    writer.write_batch(batch)
+            arrow_sink.close()
+
+        # Verify the file was created and has correct size
+        self.test_case.assertTrue(self.storage.exists(parquet_path))
+        file_size = self.storage.get_size(parquet_path)
+        self.test_case.assertGreater(file_size, 0)
+
+        # Read back the parquet file and verify data
+        # Use get_object instead of get_object_stream to avoid seek issues with some implementations
+        parquet_data = self.storage.get_object(parquet_path)
+        table = pq.read_table(io.BytesIO(parquet_data))
+
+        # Verify we have the expected number of rows
+        expected_rows = num_batches * batch_size
+        self.test_case.assertEqual(len(table), expected_rows)
+
+        # Verify schema matches
+        expected_columns = {"id", "name", "value", "active", "timestamp"}
+        actual_columns = set(table.column_names)
+        self.test_case.assertEqual(actual_columns, expected_columns)
+
+        # Verify some data integrity
+        ids = table.column("id").to_pylist()
+        names = table.column("name").to_pylist()
+        values = table.column("value").to_pylist()
+        actives = table.column("active").to_pylist()
+
+        # Check that we have sequential IDs from 0 to expected_rows-1
+        self.test_case.assertEqual(ids, list(range(expected_rows)))
+
+        # Check first few names to ensure pattern is correct
+        name_multiplier = 10 if is_minio else 1
+        expected_name_0 = "item_0_0" * name_multiplier
+        expected_name_1 = "item_0_1" * name_multiplier
+        self.test_case.assertEqual(names[0], expected_name_0)
+        self.test_case.assertEqual(names[1], expected_name_1)
+
+        # Check that values are calculated correctly
+        self.test_case.assertAlmostEqual(values[0], 0.0, places=1)
+        self.test_case.assertAlmostEqual(values[1], 1.1, places=1)
+        if not is_minio:  # Only check this for smaller datasets
+            self.test_case.assertEqual(names[2], "item_0_2")
+            self.test_case.assertEqual(names[3], "item_1_0")
+            self.test_case.assertAlmostEqual(values[3], 10.5, places=1)
+
+        # Check boolean pattern
+        expected_actives = [i % 2 == 0 for i in range(expected_rows)]
+        self.test_case.assertEqual(actives, expected_actives)

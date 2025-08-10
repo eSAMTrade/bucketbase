@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from bucketbase.minio_bucket import build_minio_client, MinioBucket
+from bucketbase.minio_bucket import MinioBucket, build_minio_client
 from tests.bucket_tester import IBucketTester
 from tests.config import CONFIG
 
@@ -40,3 +40,9 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_get_size(self):
         self.tester.test_get_size()
+
+    def test_open_multipart_sink(self):
+        self.tester.test_open_multipart_sink()
+
+    def test_open_multipart_sink_with_parquet(self):
+        self.tester.test_open_multipart_sink_with_parquet()

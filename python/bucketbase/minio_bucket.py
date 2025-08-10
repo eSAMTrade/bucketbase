@@ -1,9 +1,12 @@
 import io
 import logging
 import os
+import threading
 import traceback
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Union, BinaryIO
+from queue import Empty, Queue
+from typing import BinaryIO, Iterable, Iterator, Union
 
 import certifi
 import minio
@@ -11,18 +14,19 @@ import urllib3
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
+from minio.helpers import MIN_PART_SIZE
 from multiminio import MultiMinio
 from streamerate import slist, stream
 from urllib3 import BaseHTTPResponse
 
-from bucketbase.ibucket import ShallowListing, IBucket, ObjectStream
+from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
 
 
 class MinioObjectStream(ObjectStream):
     def __init__(self, response: BaseHTTPResponse, object_name: PurePosixPath) -> None:
         super().__init__(response, object_name)
         self._response = response
-        self._size = int(response.headers.get('content-length', -1))
+        self._size = int(response.headers.get("content-length", -1))
 
     def __enter__(self) -> ObjectStream:
         return self._response
@@ -32,13 +36,9 @@ class MinioObjectStream(ObjectStream):
         self._response.release_conn()
 
 
-def build_minio_client(endpoints: str,
-                       access_key: str,
-                       secret_key: str,
-                       secure: bool = True,
-                       region: str | None = "custom",
-                       conn_pool_size: int = 128,
-                       timeout: int = 5) -> Minio:
+def build_minio_client(
+    endpoints: str, access_key: str, secret_key: str, secure: bool = True, region: str | None = "custom", conn_pool_size: int = 128, timeout: int = 5
+) -> Minio:
     """
     :param endpoints: comma separated list of endpoints
     :param access_key: access key
@@ -83,7 +83,7 @@ def build_minio_client(endpoints: str,
 
 
 class MinioBucket(IBucket):
-    PART_SIZE = 5 * 1024 * 1024
+    PART_SIZE = MIN_PART_SIZE
 
     def __init__(self, bucket_name: str, minio_client: Minio) -> None:
         self._minio_client = minio_client
@@ -188,3 +188,127 @@ class MinioBucket(IBucket):
             if e.code == "NoSuchKey":
                 raise FileNotFoundError(f"Object {name} not found in bucket {self._bucket_name} on Minio") from e
             raise
+
+    @contextmanager
+    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+        """
+        Returns a BinaryIO writer that streams to MinIO using the SDK's multipart upload via
+        put_object(length=-1, part_size=...). Implementation uses a bounded queue and a background
+        thread that reads from the queue and feeds put_object. Memory is bounded by queue size * chunk size.
+        """
+        _name = self._validate_name(name)
+
+        class _QueueWriter(io.RawIOBase):
+            CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
+
+            def __init__(self, q: Queue, closed_flag: list[int]) -> None:
+                super().__init__()
+                self._q = q
+                self._closed_flag = closed_flag
+
+            def writable(self) -> bool:
+                return True
+
+            def write(self, b) -> int:
+                if self.closed:
+                    raise ValueError("I/O operation on closed file.")
+                if not isinstance(b, (bytes, bytearray, memoryview)):
+                    b = bytes(b)
+                mv = memoryview(b)
+                total = 0
+                while total < len(mv):
+                    n = min(self.CHUNK_SIZE, len(mv) - total)
+                    chunk = mv[total : total + n].tobytes()
+                    if chunk:
+                        self._q.put(chunk)
+                    total += n
+                return len(mv)
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                if not self.closed:
+                    try:
+                        self._closed_flag[0] = 1
+                        self._q.put(None)  # EOF marker
+                    finally:
+                        super().close()
+
+        class _QueueReader(io.RawIOBase):
+            def __init__(self, q: Queue, closed_flag: list[int]) -> None:
+                self._q = q
+                self._buffer = bytearray()
+                self._eof = False
+                self._closed_flag = closed_flag
+
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, b) -> int:
+                if self._eof:
+                    return 0
+                view = memoryview(b)
+                total = 0
+                while total < len(view):
+                    if self._buffer:
+                        n = min(len(self._buffer), len(view) - total)
+                        view[total : total + n] = self._buffer[:n]
+                        del self._buffer[:n]
+                        total += n
+                        if total:
+                            break
+                    try:
+                        chunk = self._q.get(timeout=0.5)
+                    except Empty:
+                        if self._closed_flag[0]:
+                            self._eof = True
+                            return 0 if total == 0 else total
+                        continue
+                    if chunk is None:
+                        self._eof = True
+                        return 0 if total == 0 else total
+                    if not isinstance(chunk, (bytes, bytearray)):
+                        chunk = bytes(chunk)
+                    self._buffer.extend(chunk)
+                return total
+
+        q: Queue = Queue(maxsize=1024)  # bounded queue
+        closed_flag = [0]
+        writer = _QueueWriter(q, closed_flag)
+        reader = _QueueReader(q, closed_flag)
+
+        exc_holder: list[BaseException | None] = [None]
+
+        def _uploader():
+            try:
+                buffered = io.BufferedReader(reader, buffer_size=max(self.PART_SIZE, MIN_PART_SIZE))
+                self._minio_client.put_object(
+                    bucket_name=self._bucket_name,
+                    object_name=_name,
+                    data=buffered,
+                    length=-1,
+                    part_size=max(self.PART_SIZE, MIN_PART_SIZE),
+                )
+            except BaseException as e:
+                exc_holder[0] = e
+            finally:
+                try:
+                    buffered.close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_uploader, name=f"minio-upload-{_name}", daemon=True)
+        t.start()
+
+        try:
+            yield writer
+            writer.close()  # signal EOF
+            t.join()
+            if exc_holder[0] is not None:
+                raise exc_holder[0]
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass

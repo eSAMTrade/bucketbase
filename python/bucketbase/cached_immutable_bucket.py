@@ -1,6 +1,10 @@
 import io
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Union
+from typing import BinaryIO, Iterable, Iterator, Union
+
+from pyxtension import validate
+from streamerate import slist
 
 from bucketbase.errors import DeleteError
 from bucketbase.fs_bucket import AppendOnlyFSBucket
@@ -10,8 +14,6 @@ from bucketbase.ibucket import (
     ObjectStream,
     ShallowListing,
 )
-from pyxtension import validate
-from streamerate import slist
 
 
 class CachedImmutableBucket(IBucket):
@@ -80,3 +82,11 @@ class CachedImmutableBucket(IBucket):
             return self._cache.get_size(name)
         except FileNotFoundError:
             return self._main.get_size(name)
+
+    @contextmanager
+    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+        """
+        Returns a writable sink that delegates to the main bucket.
+        Since this is an immutable bucket, writes go directly to the main bucket.
+        """
+        raise io.UnsupportedOperation("open_multipart_sink is not supported for CachedImmutableBucket")
