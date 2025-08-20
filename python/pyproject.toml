@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bucketbase"
-version = "1.4.1"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
+version = "1.4.2"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
 authors = ["Andrei Suiu <andrei.suiu@gmail.com>"]
 repository = "https://github.com/asuiu/bucketbase"
@@ -13,7 +13,7 @@ requests = ">=2.25.1"
 streamerate = ">=1.1.4"
 pyxtension = ">=1.17.1"
 StrEnum = ">=0.4.0"
-filelock = ">3.0.12"
+filelock= ">3.0.12"
 minio = { version = ">=7.2.4", optional = true }
 multiminio = { version = ">=1.0.2", optional = true }
 
@@ -25,6 +25,7 @@ pytest = "^8.3.5"
 minio = "^7.2.15"
 multiminio = "^1.0.2"
 tsx = ">=0.1.16"
+pyarrow = ">=21.0.0"
 twine = ">=6.1.0"
 
 [tool.black]

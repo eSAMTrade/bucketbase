@@ -7,7 +7,7 @@ from tests.bucket_tester import IBucketTester
 
 
 class TestIBucket(TestCase):
-    def test_split_prefix(self):
+    def test_split_prefix(self) -> None:
         res = IBucket._split_prefix("dir1/dir2/file.txt")
         self.assertEqual(res, ("dir1/dir2/", "file.txt"))
 
@@ -31,7 +31,7 @@ class TestIBucket(TestCase):
         for prefix in IBucketTester.INVALID_PREFIXES:
             self.assertRaises(ValueError, IBucket._split_prefix, prefix)
 
-    def test_copy_prefix_to_prefix(self):
+    def test_copy_prefix_to_prefix(self) -> None:
         src_bucket = MemoryBucket()
         dst_bucket = MemoryBucket()
 
@@ -51,7 +51,7 @@ class TestIBucket(TestCase):
         ]
         self.assertEqual(objects, expected_objects)
 
-    def test_copy_prefix_to_prefix_mthreaded(self):
+    def test_copy_prefix_to_prefix_mthreaded(self) -> None:
         src_bucket = MemoryBucket()
         dst_bucket = MemoryBucket()
 
@@ -71,7 +71,7 @@ class TestIBucket(TestCase):
         ]
         self.assertEqual(objects, expected_objects)
 
-    def test_copy_prefix_to_root(self):
+    def test_copy_prefix_to_root(self) -> None:
         src_bucket = MemoryBucket()
         dst_bucket = MemoryBucket()
 
@@ -91,7 +91,7 @@ class TestIBucket(TestCase):
         ]
         self.assertEqual(objects, expected_objects)
 
-    def test_copy_dir_prefix_to_root(self):
+    def test_copy_dir_prefix_to_root(self) -> None:
         """
         This covers a regression where the destination object name starts with "/", like /dir2/file1.txt
         as "dir1/dir2" - "dir1" = "/dir2"
@@ -110,7 +110,7 @@ class TestIBucket(TestCase):
         expected_objects = [PurePosixPath("dir2/file1.txt"), PurePosixPath("dir2/file2.txt"), PurePosixPath("file4.txt")]
         self.assertEqual(objects, expected_objects)
 
-    def test_copy_prefix_from_dir_to_root(self):
+    def test_copy_prefix_from_dir_to_root(self) -> None:
         src_bucket = MemoryBucket()
         dst_bucket = MemoryBucket()
 
@@ -125,7 +125,7 @@ class TestIBucket(TestCase):
         expected_objects = [PurePosixPath("dir2/file1.txt"), PurePosixPath("dir2/file2.txt"), PurePosixPath("file4.txt")]
         self.assertEqual(objects, expected_objects)
 
-    def test_move_prefix(self):
+    def test_move_prefix(self) -> None:
         src_bucket = MemoryBucket()
         dst_bucket = MemoryBucket()
 
@@ -143,7 +143,7 @@ class TestIBucket(TestCase):
         remained_objects = src_bucket.list_objects()
         self.assertEqual(remained_objects, [PurePosixPath("directory_file.txt")])
 
-    def test_open_write(self):
+    def test_open_write(self) -> None:
         """Test open_write method using MemoryBucket."""
         bucket = MemoryBucket()
         tester = IBucketTester(bucket, self)
@@ -152,7 +152,7 @@ class TestIBucket(TestCase):
         finally:
             tester.cleanup()
 
-    def test_open_write_with_parquet(self):
+    def test_open_write_with_parquet(self) -> None:
         """Test open_write with parquet files using MemoryBucket."""
         bucket = MemoryBucket()
         tester = IBucketTester(bucket, self)
