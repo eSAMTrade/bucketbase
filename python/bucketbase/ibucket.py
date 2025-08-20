@@ -3,10 +3,10 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager, _GeneratorContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Iterator, Optional, Tuple, Union
+from typing import BinaryIO, Iterable, Optional, Tuple, Union
 
 from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
@@ -38,7 +38,7 @@ class ObjectStream:
     def __enter__(self) -> BinaryIO:
         return self._stream
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         self._stream.close()
 
 
@@ -278,9 +278,10 @@ class IBucket(PydanticStrictValidated, ABC):
         supporting S3 multipart upload for efficient large file transfers, or CSV streaming
 
         :param name: Name of the object to store
-        :return: Context manager yielding a BinaryIO writer
+        :return: Context manager yielding a BinaryIO sink for writing
         :raises ValueError: If name is invalid
-        :raises IOError: If write operations fail
+        :raises FileExistsError: If the object already exists
+        :raises IOError: If sink operations fail
 
         Example usage:
             with bucket.open_write("data.parquet") as writer:
@@ -481,7 +482,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         raise NotImplementedError()
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:  # type: ignore
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
         Prevents concurrent writes to the same object.

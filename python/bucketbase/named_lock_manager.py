@@ -21,8 +21,8 @@ class BaseNamedLockManager(ABC):
 class ThreadLockManager(BaseNamedLockManager):
     """Thread-based lock manager (i.e. only in the same process)"""
 
-    def __init__(self):
-        self._locks = {}
+    def __init__(self) -> None:
+        self._locks: dict[str, threading.Lock] = {}
         self._lock_dict_lock = threading.Lock()
 
     def get_lock(self, name: PurePosixPath | str, only_existing=False) -> threading.Lock:
@@ -40,10 +40,10 @@ class FileLockManager(BaseNamedLockManager):
 
     LOCK_SEP = "#"
 
-    def __init__(self, lock_dir: Path):
+    def __init__(self, lock_dir: Path) -> None:
         self._lock_dir = lock_dir
         self._lock_dir.mkdir(parents=True, exist_ok=True)
-        self._locks = {}
+        self._locks: dict[str, FileLockForPath] = {}
         self._lock_dict_lock = threading.Lock()
 
     def get_lock(self, name: PurePosixPath | str, only_existing=False) -> FileLockForPath:

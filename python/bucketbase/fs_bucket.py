@@ -28,8 +28,9 @@ class FSObjectStream(ObjectStream):
         self._stream = self._path.open("rb")
         return self._stream
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self._stream.close()
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        if self._stream:
+            self._stream.close()
         self._stream = None
 
 

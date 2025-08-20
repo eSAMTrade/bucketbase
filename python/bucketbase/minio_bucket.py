@@ -16,7 +16,8 @@ from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
 from minio.helpers import MIN_PART_SIZE
 from multiminio import MultiMinio
-from streamerate import slist, stream
+from streamerate import slist as slist
+from streamerate import stream as sstream
 from urllib3 import BaseHTTPResponse
 
 from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
@@ -31,7 +32,7 @@ class MinioObjectStream(ObjectStream):
     def __enter__(self) -> ObjectStream:
         return self._response
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         self._response.close()
         self._response.release_conn()
 
@@ -147,7 +148,7 @@ class MinioBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         _prefix = str(prefix)
         listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_prefix, recursive=True)
-        object_names = stream(listing_itr).map(Object.object_name.fget).map(PurePosixPath).to_list()
+        object_names = sstream(listing_itr).map(Object.object_name.fget).map(PurePosixPath).to_list()
         return object_names
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
@@ -157,7 +158,7 @@ class MinioBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         _prefix = str(prefix)
         listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_prefix, recursive=False)
-        object_names = stream(listing_itr).map(Object.object_name.fget).to_list()
+        object_names = sstream(listing_itr).map(Object.object_name.fget).to_list()
         prefixes = object_names.filter(lambda x: x.endswith("/")).to_list()
         objects = object_names.filter(lambda x: not x.endswith("/")).map(PurePosixPath).to_list()
         return ShallowListing(objects=objects, prefixes=prefixes)
@@ -174,7 +175,7 @@ class MinioBucket(IBucket):
             raise
 
     def remove_objects(self, names: Iterable[PurePosixPath | str]) -> slist[DeleteError]:
-        delete_objects_stream = stream(names).map(self._validate_name).map(DeleteObject)
+        delete_objects_stream = sstream(names).map(self._validate_name).map(DeleteObject)
 
         # the return value is a generator and if will not be converted to a list the deletion won't happen
         errors = slist(self._minio_client.remove_objects(self._bucket_name, delete_objects_stream))
@@ -220,7 +221,7 @@ class MinioBucket(IBucket):
 
         buffer_transfer_queue: Queue[Optional[bytes]] = Queue(maxsize=16)  # bounded queue
         closed_flag = [0]
-        writer = _QueueWriter(buffer_transfer_queue, closed_flag)
+        writer = _QueueWriter(buffer_transfer_queue)
         reader = _QueueReader(buffer_transfer_queue, closed_flag)
 
         shared_exc_holder: list[BaseException | None] = [None]
@@ -244,10 +245,10 @@ class MinioBucket(IBucket):
 class _QueueWriter(io.RawIOBase):
     CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
 
-    def __init__(self, buffer_transfer_queue: Queue[Optional[bytes]], closed_flag: list[int]) -> None:
+    def __init__(self, buffer_transfer_queue: Queue[Optional[bytes]]) -> None:
         super().__init__()
         self._buffer_transfer_queue = buffer_transfer_queue
-        self._closed_flag = closed_flag
+        self._buffer = bytearray()
 
     def writable(self) -> bool:
         return True
@@ -257,23 +258,30 @@ class _QueueWriter(io.RawIOBase):
             raise ValueError("I/O operation on closed file.")
         if not isinstance(b, (bytes, bytearray, memoryview)):
             b = bytes(b)
-        mv = memoryview(b)
-        total = 0
-        while total < len(mv):
-            n = min(self.CHUNK_SIZE, len(mv) - total)
-            chunk = mv[total : total + n].tobytes()
-            if chunk:
-                self._buffer_transfer_queue.put(chunk)
-            total += n
-        return len(mv)
+
+        self._buffer.extend(b)
+
+        # Send complete chunks to queue
+        while len(self._buffer) >= self.CHUNK_SIZE:
+            chunk = bytes(self._buffer[: self.CHUNK_SIZE])
+            self._buffer_transfer_queue.put(chunk)
+            del self._buffer[: self.CHUNK_SIZE]
+
+        return len(b)
 
     def flush(self) -> None:
-        return None
+        if self.closed:
+            return
+        # Send any remaining buffered data
+        if self._buffer:
+            chunk = bytes(self._buffer)
+            self._buffer_transfer_queue.put(chunk)
+            self._buffer.clear()
 
     def close(self) -> None:
         if not self.closed:
             try:
-                self._closed_flag[0] = 1
+                self.flush()  # Flush remaining data first
                 self._buffer_transfer_queue.put(None)  # EOF marker
             finally:
                 super().close()
@@ -312,7 +320,5 @@ class _QueueReader(io.RawIOBase):
             if chunk is None:
                 self._eof = True
                 return 0 if total == 0 else total
-            if not isinstance(chunk, (bytes, bytearray)):
-                chunk = bytes(chunk)
             self._buffer.extend(chunk)
         return total

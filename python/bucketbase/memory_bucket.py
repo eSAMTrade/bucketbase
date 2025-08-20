@@ -4,7 +4,8 @@ from pathlib import PurePosixPath
 from threading import RLock
 from typing import BinaryIO, Iterable, Union
 
-from streamerate import slist, sset, stream
+from streamerate import slist, sset
+from streamerate import stream as sstream
 
 from bucketbase import DeleteError
 from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
@@ -25,7 +26,7 @@ class MemoryBucket(IBucket):
     """
 
     def __init__(self) -> None:
-        self._objects = {}  # Store files
+        self._objects: dict[str, bytes] = {}
         self._lock = RLock()
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
@@ -55,7 +56,7 @@ class MemoryBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         str_prefix = str(prefix)
         with self._lock:
-            result = stream(self._objects).filter(lambda obj: str(obj).startswith(str_prefix)).map(PurePosixPath).to_list()
+            result = sstream(self._objects).filter(lambda obj: str(obj).startswith(str_prefix)).map(PurePosixPath).to_list()
         return result
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
