@@ -3,10 +3,10 @@ import logging
 import os
 import threading
 import traceback
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path, PurePosixPath
 from queue import Empty, Queue
-from typing import BinaryIO, Iterable, Iterator, Union
+from typing import BinaryIO, Iterable, Optional, Union
 
 import certifi
 import minio
@@ -189,8 +189,28 @@ class MinioBucket(IBucket):
                 raise FileNotFoundError(f"Object {name} not found in bucket {self._bucket_name} on Minio") from e
             raise
 
+    def _uploader(self, _name: str, reader: BinaryIO, exc_holder: list[BaseException | None]):
+        buffered: Optional[io.BufferedReader] = None
+        try:
+            buffered = io.BufferedReader(reader, buffer_size=max(self.PART_SIZE, MIN_PART_SIZE))
+            self._minio_client.put_object(
+                bucket_name=self._bucket_name,
+                object_name=_name,
+                data=buffered,
+                length=-1,
+                part_size=max(self.PART_SIZE, MIN_PART_SIZE),
+            )
+        except BaseException as e:
+            exc_holder[0] = e
+        finally:
+            try:
+                if buffered is not None:
+                    buffered.close()
+            except Exception:
+                pass
+
     @contextmanager
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a BinaryIO writer that streams to MinIO using the SDK's multipart upload via
         put_object(length=-1, part_size=...). Implementation uses a bounded queue and a background
@@ -198,117 +218,101 @@ class MinioBucket(IBucket):
         """
         _name = self._validate_name(name)
 
-        class _QueueWriter(io.RawIOBase):
-            CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
-
-            def __init__(self, q: Queue, closed_flag: list[int]) -> None:
-                super().__init__()
-                self._q = q
-                self._closed_flag = closed_flag
-
-            def writable(self) -> bool:
-                return True
-
-            def write(self, b) -> int:
-                if self.closed:
-                    raise ValueError("I/O operation on closed file.")
-                if not isinstance(b, (bytes, bytearray, memoryview)):
-                    b = bytes(b)
-                mv = memoryview(b)
-                total = 0
-                while total < len(mv):
-                    n = min(self.CHUNK_SIZE, len(mv) - total)
-                    chunk = mv[total : total + n].tobytes()
-                    if chunk:
-                        self._q.put(chunk)
-                    total += n
-                return len(mv)
-
-            def flush(self) -> None:
-                return None
-
-            def close(self) -> None:
-                if not self.closed:
-                    try:
-                        self._closed_flag[0] = 1
-                        self._q.put(None)  # EOF marker
-                    finally:
-                        super().close()
-
-        class _QueueReader(io.RawIOBase):
-            def __init__(self, q: Queue, closed_flag: list[int]) -> None:
-                self._q = q
-                self._buffer = bytearray()
-                self._eof = False
-                self._closed_flag = closed_flag
-
-            def readable(self) -> bool:
-                return True
-
-            def readinto(self, b) -> int:
-                if self._eof:
-                    return 0
-                view = memoryview(b)
-                total = 0
-                while total < len(view):
-                    if self._buffer:
-                        n = min(len(self._buffer), len(view) - total)
-                        view[total : total + n] = self._buffer[:n]
-                        del self._buffer[:n]
-                        total += n
-                        if total:
-                            break
-                    try:
-                        chunk = self._q.get(timeout=0.5)
-                    except Empty:
-                        if self._closed_flag[0]:
-                            self._eof = True
-                            return 0 if total == 0 else total
-                        continue
-                    if chunk is None:
-                        self._eof = True
-                        return 0 if total == 0 else total
-                    if not isinstance(chunk, (bytes, bytearray)):
-                        chunk = bytes(chunk)
-                    self._buffer.extend(chunk)
-                return total
-
-        q: Queue = Queue(maxsize=1024)  # bounded queue
+        buffer_transfer_queue: Queue[Optional[bytes]] = Queue(maxsize=16)  # bounded queue
         closed_flag = [0]
-        writer = _QueueWriter(q, closed_flag)
-        reader = _QueueReader(q, closed_flag)
+        writer = _QueueWriter(buffer_transfer_queue, closed_flag)
+        reader = _QueueReader(buffer_transfer_queue, closed_flag)
 
-        exc_holder: list[BaseException | None] = [None]
+        shared_exc_holder: list[BaseException | None] = [None]
 
-        def _uploader():
-            try:
-                buffered = io.BufferedReader(reader, buffer_size=max(self.PART_SIZE, MIN_PART_SIZE))
-                self._minio_client.put_object(
-                    bucket_name=self._bucket_name,
-                    object_name=_name,
-                    data=buffered,
-                    length=-1,
-                    part_size=max(self.PART_SIZE, MIN_PART_SIZE),
-                )
-            except BaseException as e:
-                exc_holder[0] = e
-            finally:
-                try:
-                    buffered.close()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_uploader, name=f"minio-upload-{_name}", daemon=True)
+        t = threading.Thread(target=self._uploader, name=f"minio-upload-{_name}", daemon=True, args=(_name, reader, shared_exc_holder))
         t.start()
 
         try:
             yield writer
             writer.close()  # signal EOF
             t.join()
-            if exc_holder[0] is not None:
-                raise exc_holder[0]
+            if shared_exc_holder[0] is not None:
+                raise shared_exc_holder[0]
         finally:
             try:
                 writer.close()
             except Exception:
                 pass
+
+
+class _QueueWriter(io.RawIOBase):
+    CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
+
+    def __init__(self, buffer_transfer_queue: Queue[Optional[bytes]], closed_flag: list[int]) -> None:
+        super().__init__()
+        self._buffer_transfer_queue = buffer_transfer_queue
+        self._closed_flag = closed_flag
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b) -> int:
+        if self.closed:
+            raise ValueError("I/O operation on closed file.")
+        if not isinstance(b, (bytes, bytearray, memoryview)):
+            b = bytes(b)
+        mv = memoryview(b)
+        total = 0
+        while total < len(mv):
+            n = min(self.CHUNK_SIZE, len(mv) - total)
+            chunk = mv[total : total + n].tobytes()
+            if chunk:
+                self._buffer_transfer_queue.put(chunk)
+            total += n
+        return len(mv)
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        if not self.closed:
+            try:
+                self._closed_flag[0] = 1
+                self._buffer_transfer_queue.put(None)  # EOF marker
+            finally:
+                super().close()
+
+
+class _QueueReader(io.RawIOBase):
+    def __init__(self, buffer_transfer_queue: Queue[Optional[bytes]], closed_flag: list[int]) -> None:
+        self._buffer_transfer_queue = buffer_transfer_queue
+        self._buffer = bytearray()
+        self._eof = False
+        self._closed_flag = closed_flag
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        if self._eof:
+            return 0
+        view = memoryview(b)
+        total = 0
+        while total < len(view):
+            if self._buffer:
+                n = min(len(self._buffer), len(view) - total)
+                view[total : total + n] = self._buffer[:n]
+                del self._buffer[:n]
+                total += n
+                if total:
+                    break
+            try:
+                chunk = self._buffer_transfer_queue.get(timeout=0.5)
+            except Empty:
+                if self._closed_flag[0]:
+                    self._eof = True
+                    return 0 if total == 0 else total
+                continue
+            if chunk is None:
+                self._eof = True
+                return 0 if total == 0 else total
+            if not isinstance(chunk, (bytes, bytearray)):
+                chunk = bytes(chunk)
+            self._buffer.extend(chunk)
+        return total

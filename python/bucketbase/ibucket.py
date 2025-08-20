@@ -3,12 +3,12 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, _GeneratorContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable, Iterator, Optional, Tuple, Union
 
-from pyxtension import PydanticValidated, validate
+from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
 from typing_extensions import Self
 
@@ -42,7 +42,7 @@ class ObjectStream:
         self._stream.close()
 
 
-class IBucket(PydanticValidated, ABC):
+class IBucket(PydanticStrictValidated, ABC):
     """
     This class is intended to be a base class for all object storage implementations.
     - it should not have any minio specific code
@@ -269,22 +269,22 @@ class IBucket(PydanticValidated, ABC):
 
     @abstractmethod
     @contextmanager
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
-        Returns a writable sink that supports multipart upload functionality.
-        The sink accumulates bytes and stores the object under 'name' when the context exits.
+        Returns a writable stream that, for MinIO, supports multipart upload functionality.
+        The returned writer accumulates bytes and stores the object under 'name' when the context exits.
 
         This method is intended to be used by pyarrow to write Parquet files in a streaming fashion,
-        supporting S3 multipart upload for efficient large file transfers.
+        supporting S3 multipart upload for efficient large file transfers, or CSV streaming
 
         :param name: Name of the object to store
-        :return: Context manager yielding a BinaryIO sink for writing
+        :return: Context manager yielding a BinaryIO writer
         :raises ValueError: If name is invalid
-        :raises IOError: If sink operations fail
+        :raises IOError: If write operations fail
 
         Example usage:
-            with bucket.open_multipart_sink("data.parquet") as sink:
-                sink.write(b"parquet data...")
+            with bucket.open_write("data.parquet") as writer:
+                writer.write(b"parquet data...")
         """
         raise NotImplementedError()
 
@@ -481,7 +481,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         raise NotImplementedError()
 
     @contextmanager
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
         Prevents concurrent writes to the same object.
@@ -496,7 +496,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         try:
             if self._base_bucket.exists(name):
                 raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
-            with self._base_bucket.open_multipart_sink(name) as sink:
+            with self._base_bucket.open_write(name) as sink:
                 yield sink
         finally:
             self._unlock_object(name)

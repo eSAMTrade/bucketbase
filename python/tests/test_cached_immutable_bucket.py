@@ -68,7 +68,7 @@ class MockMainBucket(IBucket):
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         raise NotImplementedError()
 
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
         raise NotImplementedError()
 
     def __init__(self, content: bytes = b"test data"):

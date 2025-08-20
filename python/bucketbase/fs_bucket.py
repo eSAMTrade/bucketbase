@@ -1,11 +1,11 @@
 import os
 import threading
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from random import random
 from time import sleep, time, time_ns
-from typing import BinaryIO, Iterable, Iterator, Optional, Union
+from typing import BinaryIO, Iterable, Optional, Union
 
 from streamerate import slist
 
@@ -112,7 +112,7 @@ class FSBucket(IBucket):
         raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
 
     @contextmanager
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable sink that uses temporary files and atomic rename operations.
         Suitable for large files and ensures atomic writes to the filesystem.

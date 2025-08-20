@@ -1,3 +1,4 @@
+import csv
 import gzip
 import io
 from io import BytesIO
@@ -240,14 +241,15 @@ class IBucketTester:
         self.storage.put_object(path1, content1)
         self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
 
-    def test_open_multipart_sink(self):
-        """Test the open_multipart_sink method functionality."""
+    def test_open_write(self):
+        """Test the open_write method functionality."""
         unique_dir = f"dir{self.us}"
         path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
         test_content = b"Test content for multipart upload"
 
+        test_object = self.storage.open_write(path)
         # Test basic functionality
-        with self.storage.open_multipart_sink(path) as sink:
+        with self.storage.open_write(path) as sink:
             sink.write(test_content)
 
         # Verify the object was stored correctly
@@ -255,36 +257,43 @@ class IBucketTester:
         self.test_case.assertEqual(retrieved_content, test_content)
 
         # Test with larger content written in chunks
-        path2 = PurePosixPath(f"{unique_dir}/multipart_large.txt")
-        chunk1 = b"First chunk of data. "
-        chunk2 = b"Second chunk of data. "
-        chunk3 = b"Third and final chunk."
-        expected_content = chunk1 + chunk2 + chunk3
+        path2 = PurePosixPath(f"{unique_dir}/multipart_large.csv.gz")
+        header = ["id", "name", "value"]
+        rows = [["1", "one", "1.1"], ["2", "two", "2.2"], ["3", "three", "3.3"]]
 
-        with self.storage.open_multipart_sink(path2) as sink:
-            sink.write(chunk1)
-            sink.write(chunk2)
-            sink.write(chunk3)
+        with self.storage.open_write(path2) as sink:
+            with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:
+                with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:
+                    w = csv.writer(gztext)
+                    w.writerow(header)
+                    for row in rows:
+                        w.writerow(row)
 
-        retrieved_content = self.storage.get_object(path2)
-        self.test_case.assertEqual(retrieved_content, expected_content)
+        obj_stream = self.storage.get_object_stream(path2)
+        with obj_stream as stream:
+            with gzip.open(stream, "rt") as gztext:
+                reader = csv.reader(gztext)
+                retrieved_rows = [row for row in reader]
+        self.test_case.assertEqual([header] + rows, retrieved_rows)
 
         # Test that the object exists and has correct size
         self.test_case.assertTrue(self.storage.exists(path2))
-        self.test_case.assertEqual(self.storage.get_size(path2), len(expected_content))
+        self.test_case.assertEqual(76, self.storage.get_size(path2))
 
         # Test with string path
         path3 = f"{unique_dir}/multipart_string_path.txt"
         string_content = b"Content written using string path"
 
-        with self.storage.open_multipart_sink(path3) as sink:
-            sink.write(string_content)
+        sink_ctxt = self.storage.open_write(path3)
+        sink = sink_ctxt.__enter__()
+        sink.write(string_content)
+        sink_ctxt.__exit__(None, None, None)
 
         retrieved_content = self.storage.get_object(path3)
         self.test_case.assertEqual(retrieved_content, string_content)
 
-    def test_open_multipart_sink_with_parquet(self):
-        """Test the open_multipart_sink method with pyarrow parquet files using multiple batches."""
+    def test_open_write_with_parquet(self):
+        """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
         parquet_path = PurePosixPath(f"{unique_dir}/test_data.parquet")
 
@@ -310,8 +319,8 @@ class IBucketTester:
             batch = pa.record_batch(batch_data, schema=schema)
             batches.append(batch)
 
-        # Write parquet file using open_multipart_sink
-        with self.storage.open_multipart_sink(parquet_path) as sink:
+        # Write parquet file using open_write
+        with self.storage.open_write(parquet_path) as sink:
             arrow_sink = pa.output_stream(sink)
             with pq.ParquetWriter(arrow_sink, schema) as writer:
                 for batch in batches:

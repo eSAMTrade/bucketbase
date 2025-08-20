@@ -143,20 +143,20 @@ class TestIBucket(TestCase):
         remained_objects = src_bucket.list_objects()
         self.assertEqual(remained_objects, [PurePosixPath("directory_file.txt")])
 
-    def test_open_multipart_sink(self):
-        """Test open_multipart_sink method using MemoryBucket."""
+    def test_open_write(self):
+        """Test open_write method using MemoryBucket."""
         bucket = MemoryBucket()
         tester = IBucketTester(bucket, self)
         try:
-            tester.test_open_multipart_sink()
+            tester.test_open_write()
         finally:
             tester.cleanup()
 
-    def test_open_multipart_sink_with_parquet(self):
-        """Test open_multipart_sink with parquet files using MemoryBucket."""
+    def test_open_write_with_parquet(self):
+        """Test open_write with parquet files using MemoryBucket."""
         bucket = MemoryBucket()
         tester = IBucketTester(bucket, self)
         try:
-            tester.test_open_multipart_sink_with_parquet()
+            tester.test_open_write_with_parquet()
         finally:
             tester.cleanup()

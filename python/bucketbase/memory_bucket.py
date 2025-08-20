@@ -1,13 +1,21 @@
 import io
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import BinaryIO, Iterable, Iterator, Union
+from typing import BinaryIO, Iterable, Union
 
 from streamerate import slist, sset, stream
 
 from bucketbase import DeleteError
 from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
+
+
+class _NonClosingBytesIO(io.BytesIO):
+    def close(self) -> None:  # do not actually close to allow final read
+        pass
+
+    def really_close(self) -> None:
+        super().close()
 
 
 class MemoryBucket(IBucket):
@@ -92,19 +100,12 @@ class MemoryBucket(IBucket):
             return len(self._objects[_name])  # Direct access to stored object
 
     @contextmanager
-    def open_multipart_sink(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable sink that accumulates bytes in memory; on close, stores the
         object under 'name'. Suitable for tests and small files.
         """
         _name = self._validate_name(name)
-
-        class _NonClosingBytesIO(io.BytesIO):
-            def close(self) -> None:  # do not actually close to allow final read
-                pass
-
-            def really_close(self) -> None:
-                super().close()
 
         sink = _NonClosingBytesIO()
         try:

@@ -44,11 +44,11 @@ class TestFSBucket(TestCase):
     def test_get_size(self):
         self.tester.test_get_size()
 
-    def test_open_multipart_sink(self):
-        self.tester.test_open_multipart_sink()
+    def test_open_write(self):
+        self.tester.test_open_write()
 
-    def test_open_multipart_sink_with_parquet(self):
-        self.tester.test_open_multipart_sink_with_parquet()
+    def test_open_write_with_parquet(self):
+        self.tester.test_open_write_with_parquet()
 
     def test_broken_stream_upload(self):
         """on broken stream upload, the file should not be "uploaded" i.e. not shown in list and shallow_list"""
