@@ -3,14 +3,16 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager, _GeneratorContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Optional, Tuple, Union
+from typing import BinaryIO, Iterable, Iterator, Optional, Tuple, Union
 
-from bucketbase.errors import DeleteError
-from pyxtension import PydanticValidated, validate
+from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
 from typing_extensions import Self
+
+from bucketbase.errors import DeleteError
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
@@ -40,7 +42,7 @@ class ObjectStream:
         self._stream.close()
 
 
-class IBucket(PydanticValidated, ABC):
+class IBucket(PydanticStrictValidated, ABC):
     """
     This class is intended to be a base class for all object storage implementations.
     - it should not have any minio specific code
@@ -265,6 +267,27 @@ class IBucket(PydanticValidated, ABC):
         """
         raise NotImplementedError()
 
+    @abstractmethod
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable stream that, for MinIO, supports multipart upload functionality.
+        The returned writer accumulates bytes and stores the object under 'name' when the context exits.
+
+        This method is intended to be used by pyarrow to write Parquet files in a streaming fashion,
+        supporting S3 multipart upload for efficient large file transfers, or CSV streaming
+
+        :param name: Name of the object to store
+        :return: Context manager yielding a BinaryIO writer
+        :raises ValueError: If name is invalid
+        :raises IOError: If write operations fail
+
+        Example usage:
+            with bucket.open_write("data.parquet") as writer:
+                writer.write(b"parquet data...")
+        """
+        raise NotImplementedError()
+
     def copy_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
         Copies all objects with given src_prefix to the dst_prefix, from self to dest_bucket.
@@ -456,3 +479,24 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         :param name: Name of the object to unlock
         """
         raise NotImplementedError()
+
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable sink that supports multipart upload functionality in a synchronized manner.
+        Prevents concurrent writes to the same object.
+
+        :param name: Name of the object to store
+        :return: Context manager yielding a BinaryIO sink for writing
+        :raises ValueError: If name is invalid
+        :raises FileExistsError: If the object already exists
+        :raises IOError: If sink operations fail
+        """
+        self._lock_object(name)
+        try:
+            if self._base_bucket.exists(name):
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+            with self._base_bucket.open_write(name) as sink:
+                yield sink
+        finally:
+            self._unlock_object(name)

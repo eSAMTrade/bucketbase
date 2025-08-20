@@ -5,9 +5,9 @@ from tempfile import TemporaryDirectory
 from threading import Barrier
 from unittest import TestCase
 
-from bucket_tester import IBucketTester
 from bucketbase import FSBucket, IBucket
-from chunkedstream import ChunkedCallbackStream
+from tests.bucket_tester import IBucketTester
+from tests.chunkedstream import ChunkedCallbackStream
 
 
 class TestFSBucket(TestCase):
@@ -43,6 +43,12 @@ class TestFSBucket(TestCase):
 
     def test_get_size(self):
         self.tester.test_get_size()
+
+    def test_open_write(self):
+        self.tester.test_open_write()
+
+    def test_open_write_with_parquet(self):
+        self.tester.test_open_write_with_parquet()
 
     def test_broken_stream_upload(self):
         """on broken stream upload, the file should not be "uploaded" i.e. not shown in list and shallow_list"""
@@ -91,9 +97,9 @@ class TestFSBucket(TestCase):
 
     def test_listing_our_dir(self):
         obj_name = PurePosixPath("dir1/file.txt")
-        self.storage.put_object_stream(obj_name, BytesIO( b"Test content"))
-        tmp_file = self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME/f"{obj_name.as_posix().replace('/', '#')}.tmp"
-        self.assertTrue((self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
+        self.storage.put_object_stream(obj_name, BytesIO(b"Test content"))
+        tmp_file = self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME / f"{obj_name.as_posix().replace('/', '#')}.tmp"
+        self.assertTrue((self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
         with open(tmp_file, "wb") as f:
             f.write(b"Test content")
 
@@ -110,14 +116,14 @@ class TestFSBucket(TestCase):
             self.storage.list_objects(self.storage.BUCKETBASE_TMP_DIR_NAME + ".something")
         self.assertRegex(str(context.exception), r"^Invalid S3 prefix: \S+")
 
-        self.assertListEqual([obj_name],self.storage.list_objects(""))
+        self.assertListEqual([obj_name], self.storage.list_objects(""))
         self.assertListEqual([obj_name], self.storage.list_objects("d"))
 
     def test_shallow_listing_our_dir(self):
         obj_name = PurePosixPath("dir1/file.txt")
-        self.storage.put_object_stream(obj_name, BytesIO( b"Test content"))
-        tmp_file = self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME/f"{obj_name.as_posix().replace('/', '#')}.tmp"
-        self.assertTrue((self.temp_dir_path/FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
+        self.storage.put_object_stream(obj_name, BytesIO(b"Test content"))
+        tmp_file = self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME / f"{obj_name.as_posix().replace('/', '#')}.tmp"
+        self.assertTrue((self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME).exists())
         with open(tmp_file, "wb") as f:
             f.write(b"Test content")
 
@@ -171,27 +177,15 @@ class TestFSBucket(TestCase):
 
     def test_concurrent_put_streams(self):
         test_cases = [
-            {
-                'name':             'same_file',
-                'filename':         'test/dir/for/concurrent_test.txt',
-                'wanted_num_files': 1,
-                'num_threads':      9
-            },
-            {
-                'name':             'distinct_files',
-                'filename':         '',
-                'wanted_num_files': 9,
-                'num_threads':      9
-            }
+            {"name": "same_file", "filename": "test/dir/for/concurrent_test.txt", "wanted_num_files": 1, "num_threads": 9},
+            {"name": "distinct_files", "filename": "", "wanted_num_files": 9, "num_threads": 9},
         ]
 
         for test_case in test_cases:
             self.setUp()  # this will run redundantly, but it's ok
-            with self.subTest(name=test_case['name']):
+            with self.subTest(name=test_case["name"]):
                 self._run_concurrent_put_stream(
-                    fname=test_case['filename'],
-                    wanted_num_files=test_case['wanted_num_files'],
-                    num_threads=test_case['num_threads']
+                    fname=test_case["filename"], wanted_num_files=test_case["wanted_num_files"], num_threads=test_case["num_threads"]
                 )
             self.tearDown()
 
@@ -225,8 +219,14 @@ class TestFSBucket(TestCase):
 
         barrier_finished_streams.wait()
 
-        self.assertEqual(0, len(list(self.storage.list_objects(""))), f"Expected 0 files in {self.storage._root}, but found {len(list(self.storage.list_objects('')))}")
-        self.assertEqual(num_threads, len(list(storage_workdir.iterdir())), f"Expected {num_threads} files in {storage_workdir}, but found {len(list(storage_workdir.iterdir()))}")
+        self.assertEqual(
+            0, len(list(self.storage.list_objects(""))), f"Expected 0 files in {self.storage._root}, but found {len(list(self.storage.list_objects('')))}"
+        )
+        self.assertEqual(
+            num_threads,
+            len(list(storage_workdir.iterdir())),
+            f"Expected {num_threads} files in {storage_workdir}, but found {len(list(storage_workdir.iterdir()))}",
+        )
 
         barrier_move_on_close.wait()
 
@@ -234,5 +234,8 @@ class TestFSBucket(TestCase):
             thread.join()
 
         self.assertEqual(0, len(list(storage_workdir.iterdir())), f"Expected 0 files in {storage_workdir}, but found {len(list(storage_workdir.iterdir()))}")
-        self.assertEqual(wanted_num_files, len(list(self.storage.list_objects(""))),
-                         f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}")
+        self.assertEqual(
+            wanted_num_files,
+            len(list(self.storage.list_objects(""))),
+            f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}",
+        )

@@ -1,5 +1,6 @@
 import os
 import threading
+from contextlib import AbstractContextManager, contextmanager
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from random import random
@@ -109,6 +110,27 @@ class FSBucket(IBucket):
                 # sleep between 50 and 100 ms
                 sleep(0.05 + 0.05 * random())
         raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
+
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable sink that uses temporary files and atomic rename operations.
+        Suitable for large files and ensures atomic writes to the filesystem.
+        """
+        _name = self._validate_name(name)
+        _object_path = self._root / _name
+        temp_obj_path = self._get_tmp_obj_path(name)
+
+        try:
+            temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
+            with temp_obj_path.open("wb") as sink:
+                yield sink
+            self._try_rename_tmp_file(temp_obj_path, _object_path)
+        except Exception:
+            # Clean up temporary file if something goes wrong
+            if temp_obj_path.exists():
+                temp_obj_path.unlink(missing_ok=True)
+            raise
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """

@@ -29,3 +29,9 @@ class TestMemoryBucket(TestCase):
 
     def test_get_size(self):
         self.tester.test_get_size()
+
+    def test_open_write(self):
+        self.tester.test_open_write()
+
+    def test_open_write_with_parquet(self):
+        self.tester.test_open_write_with_parquet()

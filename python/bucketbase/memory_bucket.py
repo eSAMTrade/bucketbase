@@ -1,12 +1,21 @@
 import io
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import Iterable, Union, BinaryIO
+from typing import BinaryIO, Iterable, Union
 
 from streamerate import slist, sset, stream
 
 from bucketbase import DeleteError
-from bucketbase.ibucket import ShallowListing, IBucket, ObjectStream
+from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
+
+
+class _NonClosingBytesIO(io.BytesIO):
+    def close(self) -> None:  # do not actually close to allow final read
+        pass
+
+    def really_close(self) -> None:
+        super().close()
 
 
 class MemoryBucket(IBucket):
@@ -89,3 +98,34 @@ class MemoryBucket(IBucket):
             if _name not in self._objects:
                 raise FileNotFoundError(f"Object {_name} not found in MemoryObjectStore")
             return len(self._objects[_name])  # Direct access to stored object
+
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable sink that accumulates bytes in memory; on close, stores the
+        object under 'name'. Suitable for tests and small files.
+        """
+        _name = self._validate_name(name)
+
+        sink = _NonClosingBytesIO()
+        try:
+            yield sink
+        finally:
+            # Attempt to read buffer regardless of prior close by pyarrow
+            try:
+                sink.flush()
+            except Exception:
+                pass
+            try:
+                content = sink.getvalue()
+            finally:
+                # ensure we free memory
+                if hasattr(sink, "really_close"):
+                    sink.really_close()
+                else:
+                    try:
+                        sink.close()
+                    except Exception:
+                        pass
+            with self._lock:
+                self._objects[_name] = content
