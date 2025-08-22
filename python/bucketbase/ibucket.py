@@ -1,6 +1,8 @@
 import io
 import os
 import re
+import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager, contextmanager
@@ -49,12 +51,12 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class _QueueWriter2(io.RawIOBase, BinaryIO):
+class _QueueFeeder(io.RawIOBase, BinaryIO):
     CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
 
     def __init__(self, queue_binary_io: QueueBinaryIO, timeout_sec: Optional[float] = None) -> None:
         super().__init__()
-        self._queue_binary_io = queue_binary_io
+        self._consumer_stream = queue_binary_io
         self._closed = False
         self._timeout_sec = timeout_sec
 
@@ -69,9 +71,14 @@ class _QueueWriter2(io.RawIOBase, BinaryIO):
 
     @override
     def write(self, b) -> int:
+        print(f"Writing {len(b)} bytes to queue")
+        if len(b) == 0:
+            print("write called with 0 bytes")
+            time.sleep(0.01)
+            return 0
         if self._closed:
             raise ValueError("I/O operation on closed file.")
-        self._queue_binary_io.feed(b)
+        self._consumer_stream.feed(b)
         return len(b)
 
     @override
@@ -80,39 +87,51 @@ class _QueueWriter2(io.RawIOBase, BinaryIO):
 
     @override
     def close(self) -> None:
+        print("Closing queue feeder")
         if not self.closed:
+            self._consumer_stream.wait_upload_success(timeout_sec=self._timeout_sec)
             self._closed = True
-            self._queue_binary_io.wait_finish(self._timeout_sec)
+            self._consumer_stream.notify_finish_write()
         super().close()
 
 
 class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
-        self._queue_binary_io = QueueBinaryIO()
+        self._consumer_stream = QueueBinaryIO()
         self._bucket = bucket
         self._exc: Optional[BaseException] = None
         self._timeout_sec = timeout_sec
-        self._queue_writer = _QueueWriter2(self._queue_binary_io, timeout_sec=self._timeout_sec)
+        self._queue_feeder = _QueueFeeder(self._consumer_stream, timeout_sec=self._timeout_sec)
+        print("Starting thread: ", time.time())
+        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True).start()
 
     def __enter__(self) -> BinaryIO:
-        thread = Thread(target=self._write_to_bucket, args=(self._name, self._queue_binary_io), daemon=True)
-        thread.start()
-        return self._queue_writer
+        print("Enter called: ", time.time())
+        # self._thread.start()
+        return self._queue_feeder
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         if exc_val is not None:
-            self._queue_binary_io.fail_reader(exc_val)
+            self._consumer_stream.fail_reader(exc_val)
         else:
-            self._queue_writer.close()
+            self._thread.join(timeout=self._timeout_sec)
+            self._queue_feeder.close()
         if self._exc is not None:
             raise self._exc
 
-    def _write_to_bucket(self, name: PurePosixPath, stream: QueueBinaryIO) -> None:
+    def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryIO) -> None:
         try:
-            self._bucket.put_object_stream(name, stream)
+            print(f"Started thread_id: {threading.get_ident()} Writing object {name} to bucket {self._bucket}", time.time())
+            # time.sleep(1)
+            self._bucket.put_object_stream(name, consumer_stream)
+            print(f"Object written to bucket {self._bucket}")
+            consumer_stream.close()
+            consumer_stream.notify_upload_success()
+            print(f"Finished writing object {name} to bucket {self._bucket}")
         except BaseException as e:
-            self._queue_binary_io.fail_feeder(e)
+            print(f"Thread failed writing object {name} to bucket {self._bucket}: {e}")
+            consumer_stream.fail_feeder(e)
             self._exc = e
 
 
@@ -341,8 +360,6 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
-    @contextmanager
     def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable stream that, for MinIO, supports multipart upload functionality.

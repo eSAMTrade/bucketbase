@@ -244,17 +244,6 @@ class IBucketTester:
     def test_open_write(self):
         """Test the open_write method functionality."""
         unique_dir = f"dir{self.us}"
-        path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
-        test_content = b"Test content for multipart upload"
-
-        test_object = self.storage.open_write(path)
-        # Test basic functionality
-        with self.storage.open_write(path) as sink:
-            sink.write(test_content)
-
-        # Verify the object was stored correctly
-        retrieved_content = self.storage.get_object(path)
-        self.test_case.assertEqual(retrieved_content, test_content)
 
         # Test with larger content written in chunks
         path2 = PurePosixPath(f"{unique_dir}/multipart_large.csv.gz")
@@ -268,6 +257,18 @@ class IBucketTester:
                     w.writerow(header)
                     for row in rows:
                         w.writerow(row)
+
+        path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
+        test_content = b"Test content for multipart upload"
+
+        test_object = self.storage.open_write(path)
+        # Test basic functionality
+        with test_object as sink:
+            sink.write(test_content)
+
+        # Verify the object was stored correctly
+        retrieved_content = self.storage.get_object(path)
+        self.test_case.assertEqual(retrieved_content, test_content)
 
         obj_stream = self.storage.get_object_stream(path2)
         with obj_stream as stream:

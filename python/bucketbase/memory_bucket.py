@@ -101,7 +101,7 @@ class MemoryBucket(IBucket):
             return len(self._objects[_name])  # Direct access to stored object
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write2(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable sink that accumulates bytes in memory; on close, stores the
         object under 'name'. Suitable for tests and small files.

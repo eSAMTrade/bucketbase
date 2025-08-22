@@ -211,7 +211,7 @@ class MinioBucket(IBucket):
                 pass
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write2(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
         """
         Returns a BinaryIO writer that streams to MinIO using the SDK's multipart upload via
         put_object(length=-1, part_size=...). Implementation uses a bounded queue and a background
