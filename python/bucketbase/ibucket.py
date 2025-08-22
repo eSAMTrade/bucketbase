@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from threading import Thread
 from typing import BinaryIO, Iterable, Optional, Tuple, Union
 
 from pyxtension import PydanticStrictValidated, validate
@@ -13,6 +14,12 @@ from streamerate import slist
 from typing_extensions import Self
 
 from bucketbase.errors import DeleteError
+from bucketbase.queue_binary_io import QueueBinaryIO
+
+try:
+    from typing import override  # type: ignore
+except ImportError:
+    from typing_extensions import override  # type: ignore
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
@@ -30,7 +37,7 @@ class ShallowListing:
     prefixes: slist[str]
 
 
-class ObjectStream:
+class ObjectStream(AbstractContextManager[BinaryIO]):
     def __init__(self, stream: BinaryIO, name: PurePosixPath) -> None:
         self._stream = stream
         self._name = name
@@ -40,6 +47,73 @@ class ObjectStream:
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         self._stream.close()
+
+
+class _QueueWriter2(io.RawIOBase, BinaryIO):
+    CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
+
+    def __init__(self, queue_binary_io: QueueBinaryIO, timeout_sec: Optional[float] = None) -> None:
+        super().__init__()
+        self._queue_binary_io = queue_binary_io
+        self._closed = False
+        self._timeout_sec = timeout_sec
+
+    def _check_uploader_error(self) -> None:
+        """Check if uploader thread has encountered an error and raise it."""
+        if self._exc_holder[0] is not None:
+            raise self._exc_holder[0]
+
+    @override
+    def writable(self) -> bool:
+        return True
+
+    @override
+    def write(self, b) -> int:
+        if self._closed:
+            raise ValueError("I/O operation on closed file.")
+        self._queue_binary_io.feed(b)
+        return len(b)
+
+    @override
+    def flush(self) -> None:
+        pass
+
+    @override
+    def close(self) -> None:
+        if not self.closed:
+            self._closed = True
+            self._queue_binary_io.wait_finish(self._timeout_sec)
+        super().close()
+
+
+class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
+    def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
+        self._name = name
+        self._queue_binary_io = QueueBinaryIO()
+        self._bucket = bucket
+        self._exc: Optional[BaseException] = None
+        self._timeout_sec = timeout_sec
+        self._queue_writer = _QueueWriter2(self._queue_binary_io, timeout_sec=self._timeout_sec)
+
+    def __enter__(self) -> BinaryIO:
+        thread = Thread(target=self._write_to_bucket, args=(self._name, self._queue_binary_io), daemon=True)
+        thread.start()
+        return self._queue_writer
+
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        if exc_val is not None:
+            self._queue_binary_io.fail_reader(exc_val)
+        else:
+            self._queue_writer.close()
+        if self._exc is not None:
+            raise self._exc
+
+    def _write_to_bucket(self, name: PurePosixPath, stream: QueueBinaryIO) -> None:
+        try:
+            self._bucket.put_object_stream(name, stream)
+        except BaseException as e:
+            self._queue_binary_io.fail_feeder(e)
+            self._exc = e
 
 
 class IBucket(PydanticStrictValidated, ABC):
@@ -269,7 +343,7 @@ class IBucket(PydanticStrictValidated, ABC):
 
     @abstractmethod
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable stream that, for MinIO, supports multipart upload functionality.
         The returned writer accumulates bytes and stores the object under 'name' when the context exits.
@@ -287,7 +361,7 @@ class IBucket(PydanticStrictValidated, ABC):
             with bucket.open_write("data.parquet") as writer:
                 writer.write(b"parquet data...")
         """
-        raise NotImplementedError()
+        return AsyncObjectWriter(name, self, timeout_sec)
 
     def copy_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
