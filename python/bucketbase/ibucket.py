@@ -527,6 +527,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         """
         raise NotImplementedError()
 
+    @contextmanager
     def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:  # type: ignore
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
@@ -538,12 +539,11 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         :raises FileExistsError: If the object already exists
         :raises IOError: If sink operations fail
         """
-        raise io.UnsupportedOperation("open_write is not supported for AbstractAppendOnlySynchronizedBucket")
-        # self._lock_object(name)
-        # try:
-        #     if self._base_bucket.exists(name):
-        #         raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
-        #     with self._base_bucket.open_write(name, timeout_sec) as sink:
-        #         yield sink
-        # finally:
-        #     self._unlock_object(name)
+        self._lock_object(name)
+        try:
+            if self._base_bucket.exists(name):
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+            with self._base_bucket.open_write(name, timeout_sec) as sink:
+                yield sink
+        finally:
+            self._unlock_object(name)

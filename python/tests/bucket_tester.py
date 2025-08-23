@@ -1,6 +1,8 @@
 import csv
 import gzip
 import io
+import threading
+import time
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import BinaryIO
@@ -274,7 +276,7 @@ class IBucketTester:
         with obj_stream as stream:
             with gzip.open(stream, "rt") as gztext:
                 reader = csv.reader(gztext)
-                retrieved_rows = [row for row in reader]
+                retrieved_rows = list(reader)
         self.test_case.assertEqual([header] + rows, retrieved_rows)
 
         # Test that the object exists and has correct size
@@ -292,6 +294,58 @@ class IBucketTester:
 
         retrieved_content = self.storage.get_object(path3)
         self.test_case.assertEqual(retrieved_content, string_content)
+
+    def test_open_write_timeout(self):
+        # test timeout functionality in open_write:we write immediately, but the consumer doesn't consume in time;
+        # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
+        # test timeout functionality in open_write: we write immediately, but the consumer doesn't consume in time.
+        unique_dir = f"dir{self.us}"
+        path_timeout = PurePosixPath(f"{unique_dir}/timeout_test.txt")
+        test_content_timeout = b"Timeout test content"
+
+        # Override _bucket.put_object_stream to simulate slow consumption in AsyncObjectWriter._write_to_bucket
+        orig_put_object_stream = self.storage.put_object_stream
+        background_threads = []
+
+        successes = []
+        try:
+
+            def slow_put_object_stream(name, consumer_stream):
+                print("slow_put_object_stream called")
+                # Track the current thread so we can wait for it to finish
+                current_thread = threading.current_thread()
+                background_threads.append(current_thread)
+                try:
+                    with consumer_stream as _stream:
+                        time.sleep(1.0)  # Sleep for 1 second to cause timeout (test uses 0.5s timeout)
+                        _stream.read()
+                    successes.append("no_exception")
+                except BaseException as e:
+                    print(f"slow_put_object_stream exception: {e}")
+                    successes.append(e)
+                print("slow_put_object_stream done")
+
+            self.storage.put_object_stream = slow_put_object_stream
+
+            test_object = self.storage.open_write(path_timeout, timeout_sec=0.5)
+            with self.test_case.assertRaises(TimeoutError):
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    sink.write(test_content_timeout)
+
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_put_object_stream
+            # Wait for any background threads to complete to avoid race conditions
+            print(f"Waiting for {len(background_threads)} background threads to complete...")
+            for thread in background_threads:
+                if thread.is_alive():
+                    print(f"Waiting for thread {thread.name} to complete...")
+                    thread.join(timeout=5.0)  # Wait up to 5 seconds
+                    if thread.is_alive():
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+            self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes])
+            print("Background thread cleanup complete")
 
     def test_open_write_with_parquet(self):
         """Test the open_write method with pyarrow parquet files using multiple batches."""

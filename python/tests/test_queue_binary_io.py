@@ -42,13 +42,14 @@ class TestQueueBinaryIO(unittest.TestCase):
         s = QueueBinaryReadable()
 
         def producer():
-            s.feed(b"a" * 1000)
+            for i in range(10):
+                s.feed(b"a" * i)
             s.send_eof()
             s.wait_finish()
 
         threading.Thread(target=producer, daemon=True).start()
         data = s.read()  # size=-1 -> read all until EOF
-        self.assertEqual(len(data), 1000)
+        self.assertEqual(len(data), sum(range(10)))
         self.assertTrue(all(c == ord("a") for c in data))
 
     def test_readinto(self):

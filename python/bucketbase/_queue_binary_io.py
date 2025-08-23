@@ -83,7 +83,10 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             raise TypeError("feed() expects bytes-like data")
         # copy to immutable bytes to avoid external mutation
         if len(data) > 0:
-            self._q.put(bytes(data), timeout=timeout_sec)
+            try:
+                self._q.put(bytes(data), timeout=timeout_sec)
+            except queue.Full:
+                raise TimeoutError(f"Timeout after {timeout_sec} seconds waiting to write data")
 
     def send_eof(self, timeout_sec: Optional[float] = None) -> None:
         """Called from feeder to signal EOF"""
@@ -228,7 +231,7 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
             return 0
         if self._closed:
             raise ValueError("I/O operation on closed file.")
-        self._consumer_stream.feed(b)
+        self._consumer_stream.feed(b, timeout_sec=self._timeout_sec)
         return len(b)
 
     @override
