@@ -113,7 +113,7 @@ class FSBucket(IBucket):
         raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable sink that uses temporary files and atomic rename operations.
         Suitable for large files and ensures atomic writes to the filesystem.

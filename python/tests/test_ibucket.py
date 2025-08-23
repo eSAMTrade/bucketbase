@@ -160,3 +160,12 @@ class TestIBucket(TestCase):
             tester.test_open_write_with_parquet()
         finally:
             tester.cleanup()
+
+    def test_open_write_timeout(self) -> None:
+        """Test open_write timeout functionality using MemoryBucket."""
+        bucket = MemoryBucket()
+        tester = IBucketTester(bucket, self)
+        try:
+            tester.test_open_write_timeout()
+        finally:
+            tester.cleanup()

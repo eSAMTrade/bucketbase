@@ -5,9 +5,8 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 
-from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
-
 from bucketbase import MemoryBucket
+from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
 
 
 class TestAppendOnlyFSBucket(unittest.TestCase):
@@ -172,3 +171,45 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         self.assertFalse(bucket_in_test.exists(object_name))
         self.base_bucket.put_object(object_name, content)
         self.assertTrue(bucket_in_test.exists(object_name))
+
+    def test_open_write_nominal(self):
+        bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
+        object_name = "test_object"
+        content = b"test content"
+        with bucket_in_test.open_write(object_name) as sink:
+            sink.write(content)
+        self.assertEqual(bucket_in_test.get_object(object_name), content)
+
+    def test_open_write_from_multiple_threads(self):
+        bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
+        object_name = "test_object"
+        content1 = b"thread1 content"
+        content2 = b"thread2 content"
+        results = []
+        first_thread_started = threading.Event()
+
+        def thread1_func():
+            with bucket_in_test.open_write(object_name) as sink:
+                first_thread_started.set()
+                sink.write(content1)
+                time.sleep(0.1)
+                results.append("thread1_done")
+
+        def thread2_func():
+            first_thread_started.wait()
+            try:
+                with bucket_in_test.open_write(object_name) as sink:
+                    sink.write(content2)
+                    results.append("thread2 should not get here")
+                results.append("thread2_success")
+            except FileExistsError:
+                results.append("thread2_file_exists")
+
+        t1 = threading.Thread(target=thread1_func)
+        t2 = threading.Thread(target=thread2_func)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        self.assertListEqual(results, ["thread1_done", "thread2_file_exists"])
+        self.assertEqual(bucket_in_test.get_object(object_name), content1)

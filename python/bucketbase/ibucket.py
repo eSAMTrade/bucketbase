@@ -6,12 +6,14 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from threading import Thread
 from typing import BinaryIO, Iterable, Optional, Tuple, Union
 
 from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
 from typing_extensions import Self
 
+from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
@@ -30,7 +32,7 @@ class ShallowListing:
     prefixes: slist[str]
 
 
-class ObjectStream:
+class ObjectStream(AbstractContextManager[BinaryIO]):
     def __init__(self, stream: BinaryIO, name: PurePosixPath) -> None:
         self._stream = stream
         self._name = name
@@ -40,6 +42,52 @@ class ObjectStream:
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         self._stream.close()
+
+
+class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
+    def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
+        self._name = name
+        self._consumer_stream = QueueBinaryReadable()
+        self._bucket = bucket
+        self._exc: Optional[BaseException] = None
+        self._timeout_sec = timeout_sec
+        self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
+
+    def __enter__(self) -> BinaryIO:
+        self._thread.start()
+        return self._queue_feeder
+
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        if exc_val is not None:
+            self._consumer_stream.send_exception_to_reader(exc_val)
+        else:
+            self._queue_feeder.close()  # This signals EOF to the reader
+        self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
+        chained_exc = None
+        if self._thread.is_alive():
+            chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
+        if self._exc is not None:
+            if chained_exc is not None:
+                chained_exc.__cause__ = self._exc
+            else:
+                chained_exc = self._exc
+        if exc_val is not None:
+            if chained_exc is not None:
+                raise exc_val.with_traceback(exc_tb) from chained_exc
+            raise exc_val
+        if chained_exc is not None:
+            raise chained_exc
+
+        return False
+
+    def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
+        try:
+            self._bucket.put_object_stream(name, consumer_stream)
+            consumer_stream.notify_upload_success()
+        except BaseException as e:
+            consumer_stream.on_consumer_fail(e)
+            self._exc = e
 
 
 class IBucket(PydanticStrictValidated, ABC):
@@ -267,9 +315,7 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
-    @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable stream that, for MinIO, supports multipart upload functionality.
         The returned writer accumulates bytes and stores the object under 'name' when the context exits.
@@ -287,7 +333,7 @@ class IBucket(PydanticStrictValidated, ABC):
             with bucket.open_write("data.parquet") as writer:
                 writer.write(b"parquet data...")
         """
-        raise NotImplementedError()
+        return AsyncObjectWriter(name, self, timeout_sec)
 
     def copy_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
@@ -482,7 +528,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         raise NotImplementedError()
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:  # type: ignore
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:  # type: ignore
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
         Prevents concurrent writes to the same object.
@@ -497,7 +543,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         try:
             if self._base_bucket.exists(name):
                 raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
-            with self._base_bucket.open_write(name) as sink:
+            with self._base_bucket.open_write(name, timeout_sec) as sink:
                 yield sink
         finally:
             self._unlock_object(name)
