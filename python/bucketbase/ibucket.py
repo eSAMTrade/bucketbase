@@ -1,8 +1,6 @@
 import io
 import os
 import re
-import threading
-import time
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager, contextmanager
@@ -15,13 +13,8 @@ from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
 from typing_extensions import Self
 
+from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
-from bucketbase.queue_binary_io import QueueBinaryIO
-
-try:
-    from typing import override  # type: ignore
-except ImportError:
-    from typing_extensions import override  # type: ignore
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
@@ -51,87 +44,49 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class _QueueFeeder(io.RawIOBase, BinaryIO):
-    CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
-
-    def __init__(self, queue_binary_io: QueueBinaryIO, timeout_sec: Optional[float] = None) -> None:
-        super().__init__()
-        self._consumer_stream = queue_binary_io
-        self._closed = False
-        self._timeout_sec = timeout_sec
-
-    def _check_uploader_error(self) -> None:
-        """Check if uploader thread has encountered an error and raise it."""
-        if self._exc_holder[0] is not None:
-            raise self._exc_holder[0]
-
-    @override
-    def writable(self) -> bool:
-        return True
-
-    @override
-    def write(self, b) -> int:
-        print(f"Writing {len(b)} bytes to queue")
-        if len(b) == 0:
-            print("write called with 0 bytes")
-            time.sleep(0.01)
-            return 0
-        if self._closed:
-            raise ValueError("I/O operation on closed file.")
-        self._consumer_stream.feed(b)
-        return len(b)
-
-    @override
-    def flush(self) -> None:
-        pass
-
-    @override
-    def close(self) -> None:
-        print("Closing queue feeder")
-        if not self.closed:
-            self._consumer_stream.wait_upload_success(timeout_sec=self._timeout_sec)
-            self._closed = True
-            self._consumer_stream.notify_finish_write()
-        super().close()
-
-
 class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
-        self._consumer_stream = QueueBinaryIO()
+        self._consumer_stream = QueueBinaryReadable()
         self._bucket = bucket
         self._exc: Optional[BaseException] = None
         self._timeout_sec = timeout_sec
-        self._queue_feeder = _QueueFeeder(self._consumer_stream, timeout_sec=self._timeout_sec)
-        print("Starting thread: ", time.time())
-        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True).start()
+        self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
 
     def __enter__(self) -> BinaryIO:
-        print("Enter called: ", time.time())
-        # self._thread.start()
+        self._thread.start()
         return self._queue_feeder
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         if exc_val is not None:
-            self._consumer_stream.fail_reader(exc_val)
+            self._consumer_stream.send_exception_to_reader(exc_val)
         else:
-            self._thread.join(timeout=self._timeout_sec)
-            self._queue_feeder.close()
+            self._queue_feeder.close()  # This signals EOF to the reader
+        self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
+        chained_exc = None
+        if self._thread.is_alive():
+            chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
         if self._exc is not None:
-            raise self._exc
+            if chained_exc is not None:
+                chained_exc.__cause__ = self._exc
+            else:
+                chained_exc = self._exc
+        if exc_val is not None:
+            if chained_exc is not None:
+                raise exc_val.with_traceback(exc_tb) from chained_exc
+            raise exc_val
+        if chained_exc is not None:
+            raise chained_exc
 
-    def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryIO) -> None:
+        return False
+
+    def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:
-            print(f"Started thread_id: {threading.get_ident()} Writing object {name} to bucket {self._bucket}", time.time())
-            # time.sleep(1)
             self._bucket.put_object_stream(name, consumer_stream)
-            print(f"Object written to bucket {self._bucket}")
-            consumer_stream.close()
             consumer_stream.notify_upload_success()
-            print(f"Finished writing object {name} to bucket {self._bucket}")
         except BaseException as e:
-            print(f"Thread failed writing object {name} to bucket {self._bucket}: {e}")
-            consumer_stream.fail_feeder(e)
+            consumer_stream.on_consumer_fail(e)
             self._exc = e
 
 
@@ -572,8 +527,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         """
         raise NotImplementedError()
 
-    @contextmanager
-    def open_write(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:  # type: ignore
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:  # type: ignore
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
         Prevents concurrent writes to the same object.
@@ -584,11 +538,12 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         :raises FileExistsError: If the object already exists
         :raises IOError: If sink operations fail
         """
-        self._lock_object(name)
-        try:
-            if self._base_bucket.exists(name):
-                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
-            with self._base_bucket.open_write(name) as sink:
-                yield sink
-        finally:
-            self._unlock_object(name)
+        raise io.UnsupportedOperation("open_write is not supported for AbstractAppendOnlySynchronizedBucket")
+        # self._lock_object(name)
+        # try:
+        #     if self._base_bucket.exists(name):
+        #         raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+        #     with self._base_bucket.open_write(name, timeout_sec) as sink:
+        #         yield sink
+        # finally:
+        #     self._unlock_object(name)

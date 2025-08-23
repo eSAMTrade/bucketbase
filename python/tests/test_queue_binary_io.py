@@ -3,12 +3,12 @@ import time
 import unittest
 from unittest import TestCase
 
-from bucketbase.queue_binary_io import BytesQueue, QueueBinaryIO
+from bucketbase._queue_binary_io import BytesQueue, QueueBinaryReadable
 
 
 class TestQueueBinaryIO(unittest.TestCase):
     def test_stream_with_producer_thread(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         payload_parts = [b"hello", b" ", b"world", b"!", b" " * 1024, b"tail"]
         total = b"".join(payload_parts)
@@ -17,6 +17,7 @@ class TestQueueBinaryIO(unittest.TestCase):
             for part in payload_parts:
                 s.feed(part)
                 time.sleep(0.01)  # simulate staggered production
+            s.send_eof()
             s.wait_finish()
 
         t = threading.Thread(target=producer, daemon=True)
@@ -38,10 +39,11 @@ class TestQueueBinaryIO(unittest.TestCase):
         self.assertEqual(s.read(), b"")
 
     def test_read_all(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         def producer():
             s.feed(b"a" * 1000)
+            s.send_eof()
             s.wait_finish()
 
         threading.Thread(target=producer, daemon=True).start()
@@ -50,13 +52,15 @@ class TestQueueBinaryIO(unittest.TestCase):
         self.assertTrue(all(c == ord("a") for c in data))
 
     def test_readinto(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         def producer():
             s.feed(b"abcdef")
+            s.send_eof()
             s.wait_finish()
 
-        threading.Thread(target=producer, daemon=True).start()
+        t = threading.Thread(target=producer, daemon=True)
+        t.start()
         buf = bytearray(4)
         n1 = s.readinto(buf)
         self.assertEqual(n1, 4)
@@ -66,9 +70,10 @@ class TestQueueBinaryIO(unittest.TestCase):
         self.assertEqual(n2, 2)
         self.assertEqual(bytes(buf2[:2]), b"ef")
         self.assertEqual(s.readinto(bytearray(1)), 0)
+        t.join(timeout=1)
 
     def test_timeout_returns_partial_then_empty(self):
-        s = QueueBinaryIO(get_timeout=0.05)
+        s = QueueBinaryReadable()
 
         # now feed some and let it return partial if not enough
         def producer():
@@ -77,7 +82,7 @@ class TestQueueBinaryIO(unittest.TestCase):
             s.feed(b"xyz")
             print("xyz fed")
             time.sleep(0.01)
-            s.notify_finish_write()
+            s.send_eof()
 
         t = threading.Thread(target=producer, daemon=True)
         t.start()
@@ -88,10 +93,11 @@ class TestQueueBinaryIO(unittest.TestCase):
         t.join(timeout=1)
 
     def test_finish_idempotent_and_eof(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         def producer():
             s.feed(b"123")
+            s.send_eof()
             s.wait_finish()
             s.wait_finish()  # extra finish should be harmless
 
@@ -109,7 +115,7 @@ class TestQueueBinaryIO(unittest.TestCase):
         t.join(timeout=1)
 
     def test_close_wakes_reader_and_prevents_feed(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
         got = {"chunk": None}
 
         def reader():
@@ -118,7 +124,7 @@ class TestQueueBinaryIO(unittest.TestCase):
         rt = threading.Thread(target=reader)
         rt.start()
         time.sleep(0.02)
-        s.notify_finish_write()
+        s.send_eof()
         rt.join(timeout=1)
         self.assertFalse(s.closed)
         self.assertEqual(got["chunk"], b"")  # close -> EOF to reader
@@ -126,7 +132,7 @@ class TestQueueBinaryIO(unittest.TestCase):
             s.feed(b"nope")
 
     def test_close_with_buffered_data(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
         s.feed(b"abc")
         succes = threading.Event()
 
@@ -139,12 +145,12 @@ class TestQueueBinaryIO(unittest.TestCase):
         ct = threading.Thread(target=consumer)
         ct.start()
         time.sleep(0.02)
-        s.notify_finish_write()
+        s.send_eof()
         self.assertTrue(succes.wait(timeout=0.1))
 
     def test_exception_propagation_immediate(self):
-        s = QueueBinaryIO()
-        s.fail_reader(RuntimeError("boom"))
+        s = QueueBinaryReadable()
+        s.send_exception_to_reader(RuntimeError("boom"))
         with self.assertRaisesRegex(RuntimeError, "boom"):
             s.read(1)
         # subsequent reads keep raising the same exception
@@ -152,12 +158,12 @@ class TestQueueBinaryIO(unittest.TestCase):
             s.read(1)
 
     def test_exception_after_some_data(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         def producer():
             s.feed(b"hello")
             time.sleep(0.02)
-            s.fail_reader(ValueError("bad"))
+            s.send_exception_to_reader(ValueError("bad"))
 
         threading.Thread(target=producer, daemon=True).start()
         # First read may return some data before the error is observed
@@ -167,24 +173,23 @@ class TestQueueBinaryIO(unittest.TestCase):
             s.read(1)
 
     def test_exception_with_read_all(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
 
         def producer():
             s.feed(b"abc")
-            s.fail_reader(IOError("net down"))
+            s.send_exception_to_reader(IOError("net down"))
 
         threading.Thread(target=producer, daemon=True).start()
-        _ = s.read(3)  # read one byte to unblock producer
         with self.assertRaisesRegex(IOError, "net down"):
-            _ = s.read(1)  # size=-1 should raise if an error arrives
+            _ = s.read(4)  # size=-1 should raise if an error arrives
 
     def test_fail_requires_exception_instance(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
         with self.assertRaises(TypeError):
-            s.fail_reader("not-exception")  # type: ignore[arg-type]
+            s.send_exception_to_reader("not-exception")  # type: ignore[arg-type]
 
     def test_flags(self):
-        s = QueueBinaryIO()
+        s = QueueBinaryReadable()
         self.assertTrue(s.readable())
         self.assertFalse(s.writable())
         self.assertFalse(s.seekable())
@@ -198,10 +203,25 @@ class TestQueueBinaryIO(unittest.TestCase):
 
         t = threading.Thread(target=consumer)
         t.start()
+        s.send_eof()
         s.wait_finish()
         self.assertEqual(s.read(1), b"")
         s.close()
         self.assertTrue(s.closed)
+
+    def test_readall_when_multiple_chunks_in_queue(self):
+        s = QueueBinaryReadable()
+
+        def producer():
+            s.feed(b"hello")
+            s.feed(b"world")
+            s.send_eof()
+
+        t = threading.Thread(target=producer, daemon=True)
+        t.start()
+        all_bytes = s.read(-1)
+        self.assertEqual(all_bytes, b"helloworld")
+        t.join(timeout=1)
 
 
 class TestBytesQueue(TestCase):
@@ -211,14 +231,14 @@ class TestBytesQueue(TestCase):
         """Partition: Single buffer, read all at once."""
         q = BytesQueue()
         data = b"Hello, world!"
-        q.append_bytes(data)
+        q.append(data)
         self.assertEqual(q.get_next(-1), data)
         self.assertEqual(q.get_next(-1), b"")
 
     def test_single_buffer_partial_reads(self):
         """Partition: Single buffer, multiple partial reads."""
         q = BytesQueue()
-        q.append_bytes(b"Hello, world!")
+        q.append(b"Hello, world!")
 
         self.assertEqual(q.get_next(5), b"Hello")
         self.assertEqual(q.get_next(2), b", ")
@@ -229,7 +249,7 @@ class TestBytesQueue(TestCase):
         """Boundary: Read exactly buffer size, then empty."""
         q = BytesQueue()
         data = b"ABC"
-        q.append_bytes(data)
+        q.append(data)
 
         self.assertEqual(q.get_next(3), data)
         self.assertEqual(q.get_next(-1), b"")
@@ -237,18 +257,18 @@ class TestBytesQueue(TestCase):
     def test_multiple_buffers_complete_read(self):
         """Partition: Multiple buffers, read all at once."""
         q = BytesQueue()
-        q.append_bytes(b"ABC")
-        q.append_bytes(b"DEF")
-        q.append_bytes(b"GHI")
+        q.append(b"ABC")
+        q.append(b"DEF")
+        q.append(b"GHI")
 
         self.assertEqual(q.get_next(-1), b"ABCDEFGHI")
 
     def test_multiple_buffers_cross_boundary_reads(self):
         """Boundary: Reads spanning multiple buffer boundaries."""
         q = BytesQueue()
-        q.append_bytes(b"ABC")
-        q.append_bytes(b"DEF")
-        q.append_bytes(b"GHI")
+        q.append(b"ABC")
+        q.append(b"DEF")
+        q.append(b"GHI")
 
         self.assertEqual(q.get_next(5), b"ABCDE")
         self.assertEqual(q.get_next(4), b"FGHI")
@@ -256,17 +276,17 @@ class TestBytesQueue(TestCase):
     def test_interleaved_append_read_operations(self):
         """Partition: Mixed append/read operations."""
         q = BytesQueue()
-        q.append_bytes(b"Hello")
+        q.append(b"Hello")
         self.assertEqual(q.get_next(3), b"Hel")
 
-        q.append_bytes(b" World")
+        q.append(b" World")
         self.assertEqual(q.get_next(4), b"lo W")
         self.assertEqual(q.get_next(-1), b"orld")
 
     def test_oversized_requests(self):
         """Boundary: Request more data than available."""
         q = BytesQueue()
-        q.append_bytes(b"Hello")
+        q.append(b"Hello")
 
         result = q.get_next(100)
         self.assertEqual(result, b"Hello")
@@ -275,19 +295,19 @@ class TestBytesQueue(TestCase):
     def test_empty_bytes_handling(self):
         """Edge case: Empty bytes operations."""
         q = BytesQueue()
-        q.append_bytes(b"")
+        q.append(b"")
         self.assertEqual(q.get_next(-1), b"")
 
-        q.append_bytes(b"Hello")
-        q.append_bytes(b"")
-        q.append_bytes(b"World")
+        q.append(b"Hello")
+        q.append(b"")
+        q.append(b"World")
         self.assertEqual(q.get_next(-1), b"HelloWorld")
 
     def test_single_byte_reads(self):
         """Performance: Many single-byte reads."""
         q = BytesQueue()
         data = b"ABCDEFGHIJ"
-        q.append_bytes(data)
+        q.append(data)
 
         result = []
         for i in range(len(data)):
@@ -302,7 +322,7 @@ class TestBytesQueue(TestCase):
         """Behavior: append_bytes creates independent copies."""
         original = bytearray(b"Hello")
         q = BytesQueue()
-        q.append_bytes(original)
+        q.append(original)
 
         original[0] = ord("X")
         self.assertEqual(q.get_next(-1), b"Hello")
@@ -311,10 +331,10 @@ class TestBytesQueue(TestCase):
         """Edge case: Type validation for append_bytes."""
         q = BytesQueue()
 
-        q.append_bytes(bytearray(b"test"))
+        q.append(bytearray(b"test"))
         self.assertEqual(q.get_next(-1), b"test")
 
-        q.append_bytes(memoryview(b"view"))
+        q.append(memoryview(b"view"))
         self.assertEqual(q.get_next(-1), b"view")
 
     def test_large_buffer_handling(self):
@@ -322,7 +342,7 @@ class TestBytesQueue(TestCase):
         large_size = 1024 * 1024
         large_data = b"X" * large_size
         q = BytesQueue()
-        q.append_bytes(large_data)
+        q.append(large_data)
 
         chunk = q.get_next(1024)
         self.assertEqual(len(chunk), 1024)
