@@ -5,8 +5,10 @@ from tempfile import TemporaryDirectory
 from threading import Barrier
 from unittest import TestCase
 
+from tsx import iTSms
+
 from bucketbase import FSBucket, IBucket
-from tests.bucket_tester import IBucketTester
+from tests.bucket_tester import IBucketTester, MockException
 from tests.chunkedstream import ChunkedCallbackStream
 
 
@@ -48,10 +50,40 @@ class TestFSBucket(TestCase):
         self.tester.test_open_write()
 
     def test_open_write_consumer_throws(self):
-        self.tester.test_open_write_consumer_throws()
+        # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
+        unique_dir = f"dir{iTSms.now() % 100_000_000:08d}"
+        path_timeout = PurePosixPath(f"{unique_dir}/open_write_consumer_throws.txt")
+        test_content_timeout = b"Timeout test content"
+
+        orig_try_rename_tmp_file = self.storage._try_rename_tmp_file
+        try:
+
+            def throwing_try_rename_tmp_file(name, consumer_stream):
+                raise MockException("test exception")
+
+            self.storage._try_rename_tmp_file = throwing_try_rename_tmp_file
+            test_object = self.storage.open_write(path_timeout, timeout_sec=3)
+            with self.assertRaises(MockException):
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    sink.write(test_content_timeout)
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_try_rename_tmp_file
 
     def test_open_write_feeder_throws(self):
-        self.tester.test_open_write_feeder_throws()
+        unique_dir = f"dir{iTSms.now() % 100_000_000:08d}"
+        path_in_test = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
+        test_content_timeout = b"Timeout test content"
+
+        test_object = self.storage.open_write(path_in_test, timeout_sec=3)
+        try:
+            with test_object as sink:
+                sink.write(test_content_timeout)
+                raise MockException("test exception")
+        except MockException as e:
+            self.assertEqual("test exception", str(e))
+        self.assertFalse(self.storage.exists(path_in_test))
 
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()

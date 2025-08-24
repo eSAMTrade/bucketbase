@@ -354,7 +354,7 @@ class IBucketTester:
     def test_open_write_consumer_throws(self):
         # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
         unique_dir = f"dir{self.us}"
-        path_timeout = PurePosixPath(f"{unique_dir}/timeout_test.txt")
+        path_timeout = PurePosixPath(f"{unique_dir}/open_write_consumer_throws.txt")
         test_content_timeout = b"Timeout test content"
 
         background_threads = []
@@ -393,7 +393,7 @@ class IBucketTester:
 
     def test_open_write_feeder_throws(self):
         unique_dir = f"dir{self.us}"
-        path_timeout = PurePosixPath(f"{unique_dir}/timeout_test.txt")
+        path_timeout = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
         test_content_timeout = b"Timeout test content"
 
         background_threads = []
@@ -444,7 +444,7 @@ class IBucketTester:
     def test_open_write_with_parquet(self):
         """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
-        parquet_path = PurePosixPath(f"{unique_dir}/test_data.parquet")
+        parquet_path = PurePosixPath(f"{unique_dir}/open_write_test_data.parquet")
 
         # Define schema for our test data
         schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("value", pa.float64()), ("active", pa.bool_()), ("timestamp", pa.timestamp("ms"))])

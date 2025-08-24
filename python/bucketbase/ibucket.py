@@ -315,7 +315,7 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[QueueBinaryWritable]:
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
         """
         Returns a writable stream that, for MinIO, supports multipart upload functionality.
         The returned writer accumulates bytes and stores the object under 'name' when the context exits.
