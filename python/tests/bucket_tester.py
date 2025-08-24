@@ -256,7 +256,7 @@ class IBucketTester:
         header = ["id", "name", "value"]
         rows = [["1", "one", "1.1"], ["2", "two", "2.2"], ["3", "three", "3.3"]]
 
-        with self.storage.open_write(path2) as sink:
+        with self.storage.open_write(path2, timeout_sec=3) as sink:
             with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:
                 with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:
                     w = csv.writer(gztext)
@@ -267,7 +267,7 @@ class IBucketTester:
         path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
         test_content = b"Test content for multipart upload"
 
-        test_object = self.storage.open_write(path)
+        test_object = self.storage.open_write(path, timeout_sec=3)
         # Test basic functionality
         with test_object as sink:
             sink.write(test_content)
@@ -291,7 +291,7 @@ class IBucketTester:
         path3 = f"{unique_dir}/multipart_string_path.txt"
         string_content = b"Content written using string path"
 
-        sink_ctxt = self.storage.open_write(path3)
+        sink_ctxt = self.storage.open_write(path3, timeout_sec=3)
         sink = sink_ctxt.__enter__()
         sink.write(string_content)
         sink_ctxt.__exit__(None, None, None)
@@ -313,7 +313,6 @@ class IBucketTester:
 
         successes = []
         try:
-
             def slow_put_object_stream(name, consumer_stream):
                 print("slow_put_object_stream called")
                 # Track the current thread so we can wait for it to finish
@@ -348,7 +347,7 @@ class IBucketTester:
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
-            self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes])
+            self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes], f"Expected [TimeoutError], but got {successes}")
             print("Background thread cleanup complete")
 
     def test_open_write_consumer_throws(self):
@@ -469,7 +468,7 @@ class IBucketTester:
             batches.append(batch)
 
         # Write parquet file using open_write
-        with self.storage.open_write(parquet_path) as sink:
+        with self.storage.open_write(parquet_path, timeout_sec=3) as sink:
             arrow_sink = pa.output_stream(sink)
             with pq.ParquetWriter(arrow_sink, schema) as writer:
                 for batch in batches:

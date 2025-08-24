@@ -132,8 +132,6 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
     def send_eof(self, timeout_sec: Optional[float] = None) -> None:
         """Called from feeder to signal EOF"""
         with self._write_lock:
-            if self._writing_closed:
-                raise ValueError("Stream already closed")
             self._writing_closed = True
         self._q.put(_EOF, timeout=timeout_sec)
 
@@ -156,10 +154,12 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             raise TypeError("fail() expects an exception instance")
         with self._write_lock:
             self._exc_to_consumer = exc
+            self._writing_closed = True
         try:
             self._q.put(_ErrorWrapper(exc), timeout=1)
         except queue.Full:
-            print("queue.Full")
+            # Set the exception directly - it will be raised on next read attempt
+            pass
 
     def on_consumer_fail(self, exc: BaseException):
         self._finish_event.set(exc)
@@ -209,6 +209,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         with self._read_lock:
             if self._closed_flag:
                 raise ValueError("Stream is closed")
+            # Check for exceptions even after reading is finished
             if self._exc_to_consumer is not None:
                 raise self._exc_to_consumer
             if self._finished_reading.is_set():
