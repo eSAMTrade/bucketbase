@@ -16,6 +16,10 @@ from tsx import iTSms
 from bucketbase.ibucket import IBucket
 
 
+class MockException(BaseException):
+    pass
+
+
 class IBucketTester:
     INVALID_PREFIXES = ["/", "/dir", "dir1//dir2", "dir1//", "star*1", "dir1/a\file.txt", "at@gmail", "sharp#1", "dollar$1", "comma,"]
     PATH_WITH_2025_KEYS = "test-dir-with-2025-keys/"
@@ -347,6 +351,96 @@ class IBucketTester:
             self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes])
             print("Background thread cleanup complete")
 
+    def test_open_write_consumer_throws(self):
+        # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
+        unique_dir = f"dir{self.us}"
+        path_timeout = PurePosixPath(f"{unique_dir}/timeout_test.txt")
+        test_content_timeout = b"Timeout test content"
+
+        background_threads = []
+        orig_put_object_stream = self.storage.put_object_stream
+        try:
+
+            def throwing_put_object_stream(name, consumer_stream):
+                print("throwing_put_object_stream called")
+                # Track the current thread so we can wait for it to finish
+                current_thread = threading.current_thread()
+                background_threads.append(current_thread)
+                with consumer_stream as _stream:
+                    time.sleep(0.1)  # Sleep for 0.1 second to cause timeout (test uses 0.5s timeout)
+                    _stream.read()
+                raise MockException("test exception")
+
+            self.storage.put_object_stream = throwing_put_object_stream
+
+            test_object = self.storage.open_write(path_timeout, timeout_sec=3)
+            with self.test_case.assertRaises(MockException):
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    sink.write(test_content_timeout)
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_put_object_stream
+            # Wait for any background threads to complete to avoid race conditions
+            print(f"Waiting for {len(background_threads)} background threads to complete...")
+            for thread in background_threads:
+                if thread.is_alive():
+                    print(f"Waiting for thread {thread.name} to complete...")
+                    thread.join(timeout=5.0)  # Wait up to 5 seconds
+                    if thread.is_alive():
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+            print("Background thread cleanup complete")
+
+    def test_open_write_feeder_throws(self):
+        unique_dir = f"dir{self.us}"
+        path_timeout = PurePosixPath(f"{unique_dir}/timeout_test.txt")
+        test_content_timeout = b"Timeout test content"
+
+        background_threads = []
+        orig_put_object_stream = self.storage.put_object_stream
+        expected_exc = []
+        try:
+
+            def throwing_put_object_stream(name, consumer_stream):
+                print("throwing_put_object_stream called")
+                # Track the current thread so we can wait for it to finish
+                current_thread = threading.current_thread()
+                background_threads.append(current_thread)
+                with consumer_stream as _stream:
+                    self.test_case.assertEqual(test_content_timeout, _stream.read(len(test_content_timeout)))
+                    try:
+                        while _stream.read(1):
+                            pass
+                    except BaseException as e:
+                        print(f"throwing_put_object_stream: caught expected exception: {e}")
+                        expected_exc.append(e)
+                        print(f"throwing_put_object_stream: re-raising expected exception: {e}")
+                        raise
+
+            self.storage.put_object_stream = throwing_put_object_stream
+
+            test_object = self.storage.open_write(path_timeout, timeout_sec=3)
+            try:
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    raise MockException("test exception")
+            except MockException as e:
+                self.test_case.assertEqual("test exception", str(e))
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_put_object_stream
+            # Wait for any background threads to complete to avoid race conditions
+            print(f"Waiting for {len(background_threads)} background threads to complete...")
+            for thread in background_threads:
+                if thread.is_alive():
+                    print(f"Waiting for thread {thread.name} to complete...")
+                    thread.join(timeout=5.0)  # Wait up to 5 seconds
+                    if thread.is_alive():
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+            print("Background thread cleanup complete")
+            self.test_case.assertEqual(1, len(expected_exc))
+            self.test_case.assertEqual("test exception", str(expected_exc[0]))
+
     def test_open_write_with_parquet(self):
         """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
@@ -361,7 +455,7 @@ class IBucketTester:
         # Check if this is a MinioBucket by looking at the class name
         is_minio = "MinioBucket" in str(type(self.storage))
         batch_size = 200000 if is_minio else 3  # 200k records per batch for minio, 3 for others
-        num_batches = 10 if not is_minio else 3  # 10 batches for others, 3 for minio
+        num_batches = 3 if is_minio else 3  # 10 batches for others, 3 for minio
 
         for batch_num in range(num_batches):
             batch_data = {

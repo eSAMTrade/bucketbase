@@ -44,7 +44,7 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
+class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
         self._consumer_stream = QueueBinaryReadable()
@@ -54,7 +54,7 @@ class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
         self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
         self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
 
-    def __enter__(self) -> BinaryIO:
+    def __enter__(self) -> QueueBinaryWritable:
         self._thread.start()
         return self._queue_feeder
 
@@ -315,7 +315,7 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[QueueBinaryWritable]:
         """
         Returns a writable stream that, for MinIO, supports multipart upload functionality.
         The returned writer accumulates bytes and stores the object under 'name' when the context exits.
