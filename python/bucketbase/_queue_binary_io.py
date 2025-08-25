@@ -156,7 +156,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             self._exc_to_consumer = exc
             self._writing_closed = True
         try:
-            self._q.put(_ErrorWrapper(exc), timeout=1)
+            self._q.put(_ErrorWrapper(exc), timeout=0.1)
         except queue.Full:
             # Set the exception directly - it will be raised on next read attempt
             pass
@@ -224,6 +224,9 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                         self._finished_reading.set()
                         assert self._writing_closed, "notify_read_finish() called before EOF"
                         self._writing_closed = True
+                        # Check for exceptions even after EOF
+                        if self._exc_to_consumer is not None:
+                            raise self._exc_to_consumer
                         return self._buffer.get_next(-1)
                     if isinstance(next_el, _ErrorWrapper):
                         self._exc_to_consumer = next_el.exc
@@ -241,6 +244,9 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 self._finished_reading.set()
                 assert self._writing_closed, "notify_read_finish() called before EOF"
                 self._writing_closed = True
+                # Check for exceptions even after EOF
+                if self._exc_to_consumer is not None:
+                    raise self._exc_to_consumer
                 return b""
             if isinstance(next_el, _ErrorWrapper):
                 self._exc_to_consumer = next_el.exc
