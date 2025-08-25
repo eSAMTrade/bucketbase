@@ -58,35 +58,40 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         self._thread.start()
         return self._queue_feeder
 
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+    def _raise_if_exception(self, exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
         chained_exc = None
+        for e in exc_chain:
+            if chained_exc is not None:
+                e.__cause__ = chained_exc
+            chained_exc = e
+        if chained_exc is not None:
+            if exc_val is not None:
+                raise exc_val.with_traceback(exc_tb) from chained_exc
+            raise chained_exc
+        if exc_val is not None:
+            raise exc_val.with_traceback(exc_tb)
+
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        exceptions_chain = []
         if exc_val is not None:
             try:
                 self._consumer_stream.send_exception_to_reader(exc_val)
             except BaseException as e:
-                chained_exc = e
-        else:
-            self._queue_feeder.close()  # This signals EOF to the reader
+                exceptions_chain.append(e)
+        try:
+            self._queue_feeder.close()
+        except BaseException as e:
+            exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
 
         if self._thread.is_alive():
-            if chained_exc is not None:
-                chained_exc.__cause__ = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
-            else:
-                chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
+            exceptions_chain.append(TimeoutError(f"Timeout waiting for thread to finish writing {self._name}"))
         if self._exc is not None:
-            if chained_exc is not None:
-                chained_exc.__cause__ = self._exc
-            else:
-                chained_exc = self._exc
-        if exc_val is not None:
-            if chained_exc is not None:
-                raise exc_val.with_traceback(exc_tb) from chained_exc
-            raise exc_val
-        if chained_exc is not None:
-            raise chained_exc
+            exceptions_chain.append(self._exc)
 
-        return False
+        self._raise_if_exception(exceptions_chain, exc_val, exc_tb)
+
+        return None
 
     def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:

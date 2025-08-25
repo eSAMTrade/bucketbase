@@ -48,7 +48,7 @@ class BytesQueue:
                 if size != -1:
                     size -= available
             else:
-                result.append(buf[start: start + size])
+                result.append(buf[start : start + size])
                 self._read_pos += size
                 size = 0
         if result:
@@ -165,10 +165,8 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 pass
             try:
                 self._q.put_nowait(_ErrorWrapper(exc))
-                print(f"DEBUG: Successfully put _ErrorWrapper after draining")
             except queue.Full:
                 # Last resort - put EOF to unblock the reader
-                print(f"DEBUG: Still can't put exception, sending EOF as fallback")
                 raise RuntimeError("Failed to propagate exception to reader")
 
     def on_consumer_fail(self, exc: BaseException):
@@ -188,9 +186,20 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             temp = self._get_no_wait_next_chunk_or_none()
             while temp is _EOF:
                 temp = self._get_no_wait_next_chunk_or_none()
-            assert temp is None, f"notify_read_finish() called before EOF, and queue contains {temp}"
-            assert self._q.empty(), "notify_read_finish() called before EOF"
-            assert self._buffer.get_next() == b""
+
+            # If there's an exception set, we might have remaining data due to early termination
+            if self._exc_to_consumer is not None:
+                # Clear any remaining data from queue and buffer when there's an exception
+                while temp is not None:
+                    temp = self._get_no_wait_next_chunk_or_none()
+                self._buffer.get_next(-1)  # Clear buffer
+                raise self._exc_to_consumer
+            else:
+                # Normal case - should be empty
+                assert temp is None, f"notify_read_finish() called before EOF, and queue contains {temp}"
+                assert self._q.empty(), "notify_read_finish() called before EOF"
+                assert self._buffer.get_next() == b""
+
             self._finish_event.set(QueueBinaryReadable.SUCCESS_FLAG)
 
     # ---- io.RawIOBase overrides ----
@@ -311,6 +320,13 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
     def close(self) -> None:
         if not self.closed:
             self._closed = True
-            self._consumer_stream.send_eof()  # Signal EOF first
+            self._consumer_stream.send_eof(self._timeout_sec)  # Signal EOF first
             self._consumer_stream.wait_upload_success_or_raise(timeout_sec=self._timeout_sec)  # Then wait for upload
         super().close()
+
+    def __del__(self):
+        try:
+            if not self._closed:
+                self.close()
+        except BaseException:
+            pass
