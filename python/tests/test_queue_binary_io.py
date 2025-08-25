@@ -55,7 +55,7 @@ class TestQueueBinaryIO(unittest.TestCase):
             for i in range(10):
                 s.feed(b"a" * i)
             s.send_eof()
-            s.wait_finish_state()
+            s._wait_finished_reading()
 
         t = threading.Thread(target=producer, daemon=True)
         t.start()
@@ -255,6 +255,7 @@ class TestQueueBinaryIO(unittest.TestCase):
 
         ct = threading.Thread(target=consumer, daemon=True)
         ct.start()
+        s.send_eof()
         self.assertIsInstance(s.wait_finish_state(timeout_sec=1), MockException)
         ct.join(timeout=1)
         self.assertFalse(ct.is_alive())
@@ -403,7 +404,7 @@ class TestBytesQueue(TestCase):
         for i in range(len(data)):
             chunk = q.get_next(1)
             result.append(chunk)
-            self.assertEqual(chunk, data[i : i + 1])
+            self.assertEqual(chunk, data[i: i + 1])
 
         self.assertEqual(b"".join(result), data)
         self.assertEqual(q.get_next(-1), b"")

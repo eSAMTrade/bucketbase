@@ -5,6 +5,7 @@ import threading
 import time
 from io import BytesIO
 from pathlib import PurePosixPath
+from queue import Queue
 from typing import BinaryIO
 from unittest import TestCase
 
@@ -401,24 +402,27 @@ class IBucketTester:
         path_timeout = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
         test_content_timeout = b"Timeout test content"
 
-        background_threads = []
+        background_threads = Queue()
         orig_put_object_stream = self.storage.put_object_stream
-        expected_exc = []
+        expected_exc = Queue()
         test_object:AsyncObjectWriter = None
         try:
             def throwing_put_object_stream(name, consumer_stream):
                 print("throwing_put_object_stream called")
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
-                background_threads.append(current_thread)
+                background_threads.put(current_thread)
                 with consumer_stream as _stream:
                     self.test_case.assertEqual(test_content_timeout, _stream.read(len(test_content_timeout)))
                     try:
-                        while _stream.read(1):
-                            pass
+                        buf = _stream.read(1)
+                        while buf != b"":
+                            print(f"throwing_put_object_stream: read {len(buf)} bytes")
+                            buf = _stream.read(1)
+                        print("All read... shouldn't get here...")
                     except BaseException as e:
                         print(f"throwing_put_object_stream: caught expected exception: {e}")
-                        expected_exc.append(e)
+                        expected_exc.put(e)
                         print(f"throwing_put_object_stream: re-raising expected exception: {e}")
                         raise
 
@@ -435,18 +439,16 @@ class IBucketTester:
             # Restore the original method to avoid side effects for other tests
             self.storage.put_object_stream = orig_put_object_stream
             # Wait for any background threads to complete to avoid race conditions
-            print(f"Waiting for {len(background_threads)} background threads to complete...")
-            for thread in background_threads:
-                if thread.is_alive():
-                    print(f"Waiting for thread {thread.name} to complete...")
-                    thread.join(timeout=5.0)  # Wait up to 5 seconds
-                    if thread.is_alive():
-                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+            print(f"Waiting for {background_threads.qsize()} background threads to complete...")
+            first_thread = background_threads.get(timeout=2.0)
+            first_thread.join(timeout=2.0)
+            self.test_case.assertFalse(first_thread.is_alive())
             print("Background thread cleanup complete")
-            self.test_case.assertEqual(1, len(expected_exc))
+            self.test_case.assertEqual(0, background_threads.qsize())
+            self.test_case.assertEqual(1, expected_exc.qsize())
             if isinstance(test_object, AsyncObjectWriter):
                 self.test_case.assertFalse(test_object._thread.is_alive())
-            self.test_case.assertEqual("test exception", str(expected_exc[0]))
+            self.test_case.assertEqual("test exception", str(expected_exc.get_nowait()))
 
     def test_open_write_with_parquet(self):
         """Test the open_write method with pyarrow parquet files using multiple batches."""

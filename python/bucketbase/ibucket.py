@@ -78,10 +78,11 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
                 self._consumer_stream.send_exception_to_reader(exc_val)
             except BaseException as e:
                 exceptions_chain.append(e)
-        try:
-            self._queue_feeder.close()
-        except BaseException as e:
-            exceptions_chain.append(e)
+        else:
+            try:
+                self._queue_feeder.close()
+            except BaseException as e:
+                exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
 
         if self._thread.is_alive():

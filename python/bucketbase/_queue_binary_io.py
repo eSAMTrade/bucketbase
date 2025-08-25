@@ -48,7 +48,7 @@ class BytesQueue:
                 if size != -1:
                     size -= available
             else:
-                result.append(buf[start : start + size])
+                result.append(buf[start: start + size])
                 self._read_pos += size
                 size = 0
         if result:
@@ -156,18 +156,27 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             self._exc_to_consumer = exc
             self._writing_closed = True
         try:
+            print("First put attempt")
             self._q.put_nowait(_ErrorWrapper(exc))
+            print("First put succeeded")
         except queue.Full:
             try:
                 while True:
                     self._q.get_nowait()  # Drain existing items
             except queue.Empty:
-                pass
+                print("Drained queue")
             try:
+                print("Putting exception")
                 self._q.put_nowait(_ErrorWrapper(exc))
+                print("Second put succeeded")  # Add this line!
             except queue.Full:
+                print("Second put also failed")
                 # Last resort - put EOF to unblock the reader
                 raise RuntimeError("Failed to propagate exception to reader")
+        # except BaseException:
+        #     print("Failed to propagate exception to reader")
+        #     raise
+        print("Exception propagated to reader")
 
     def on_consumer_fail(self, exc: BaseException):
         self._finish_event.set(exc)
@@ -201,6 +210,10 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 assert self._buffer.get_next() == b""
 
             self._finish_event.set(QueueBinaryReadable.SUCCESS_FLAG)
+
+    def _wait_finished_reading(self, timeout_sec: Optional[float] = None) -> None:
+        """ This method is used only for debug and testing purposes"""
+        self._finished_reading.wait(timeout_sec)
 
     # ---- io.RawIOBase overrides ----
     @override
