@@ -22,7 +22,7 @@ class TestQueueBinaryIO(unittest.TestCase):
                 s.feed(part)
                 time.sleep(0.01)  # simulate staggered production
             s.send_eof()
-            s.wait_finish_state()
+            s.wait_finish_state()  # we intentionally don't add timeout here, as we wait for thread to finish below
 
         t = threading.Thread(target=producer, daemon=True)
         t.start()
@@ -72,7 +72,7 @@ class TestQueueBinaryIO(unittest.TestCase):
         def producer():
             s.feed(b"abcdef")
             s.send_eof()
-            s.wait_finish_state()
+            s.wait_finish_state()  # we intentionally don't add timeout here, as we wait for thread to finish below
 
         t = threading.Thread(target=producer, daemon=True)
         t.start()
@@ -116,7 +116,7 @@ class TestQueueBinaryIO(unittest.TestCase):
         def producer():
             s.feed(b"123")
             s.send_eof()
-            s.wait_finish_state()
+            s.wait_finish_state()  # we intentionally don't add timeout here, as we wait for thread to finish below
             s.wait_finish_state()  # extra finish should be harmless
 
         t = threading.Thread(target=producer, daemon=True)
@@ -211,7 +211,7 @@ class TestQueueBinaryIO(unittest.TestCase):
         t.join(timeout=1)
         self.assertFalse(t.is_alive())
 
-    def test_exceptioN_to_reader_requires_exception_instance(self):
+    def test_exception_to_reader_requires_exception_instance(self):
         s = QueueBinaryReadable()
         with self.assertRaises(TypeError):
             s.send_exception_to_reader("not-exception")  # type: ignore[arg-type]
@@ -404,7 +404,7 @@ class TestBytesQueue(TestCase):
         for i in range(len(data)):
             chunk = q.get_next(1)
             result.append(chunk)
-            self.assertEqual(chunk, data[i: i + 1])
+            self.assertEqual(chunk, data[i : i + 1])
 
         self.assertEqual(b"".join(result), data)
         self.assertEqual(q.get_next(-1), b"")

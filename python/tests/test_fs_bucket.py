@@ -58,7 +58,7 @@ class TestFSBucket(TestCase):
         orig_try_rename_tmp_file = self.storage._try_rename_tmp_file
         try:
 
-            def throwing_try_rename_tmp_file(name, consumer_stream):
+            def throwing_try_rename_tmp_file(tmp_file_path: Path, object_path: Path):
                 raise MockException("test exception")
 
             self.storage._try_rename_tmp_file = throwing_try_rename_tmp_file
@@ -69,7 +69,7 @@ class TestFSBucket(TestCase):
                     sink.write(test_content_timeout)
         finally:
             # Restore the original method to avoid side effects for other tests
-            self.storage.put_object_stream = orig_try_rename_tmp_file
+            self.storage._try_rename_tmp_file = orig_try_rename_tmp_file
 
     def test_open_write_feeder_throws(self):
         unique_dir = f"dir{iTSms.now() % 100_000_000:08d}"

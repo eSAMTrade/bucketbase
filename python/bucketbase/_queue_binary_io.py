@@ -109,8 +109,6 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         self._finish_event: StatefulEvent[BaseException | object | None] = StatefulEvent()
         self._read_lock = threading.RLock()
         self._write_lock = threading.RLock()
-        # Track when exception should be checked - only after consuming pre-exception data
-        self._exception_check_enabled = False
 
     def feed(self, data: Union[bytes, bytearray, memoryview], timeout_sec: Optional[float] = None) -> None:
         with self._write_lock:
@@ -161,12 +159,12 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             self._writing_closed = True
             self._exc_to_consumer.set(exc)
 
-        # draing the queue first
+        # draining the queue first
         while self._get_no_wait_next_chunk_or_none() is not None:
             pass
         # we expect no one is writing to the queue at this point from our thread
         try:
-            self._q.put_nowait(_ErrorWrapper(exc))  # Wait up to 5 seconds
+            self._q.put_nowait(_ErrorWrapper(exc))
         except queue.Full:
             raise RuntimeError(f"Failed to propagate exception to reader. Someone unexpected thread is putting data in the queue: {self._q.qsize()}")
 
@@ -195,11 +193,10 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                     temp = self._get_no_wait_next_chunk_or_none()
                 self._buffer.get_next(-1)  # Clear buffer
                 raise self._exc_to_consumer.get_nowait()
-            else:
-                # Normal case - should be empty
-                assert temp is None, f"notify_read_finish() called before EOF, and queue contains {temp}"
-                assert self._q.empty(), "notify_read_finish() called before EOF"
-                assert self._buffer.get_next() == b""
+            # Normal case - should be empty
+            assert temp is None, f"notify_upload_success() called before EOF, and queue contains {temp}"
+            assert self._q.empty(), "notify_upload_success() called before EOF"
+            assert self._buffer.get_next() == b""
 
             self._finish_event.set(QueueBinaryReadable.SUCCESS_FLAG)
 
@@ -248,7 +245,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                         raise self._exc_to_consumer.get_nowait()
                     if next_el is _EOF:
                         self._finished_reading.set()
-                        assert self._writing_closed, "notify_read_finish() called before EOF"
+                        assert self._writing_closed, "EOF observed before send_eof() flagged _writing_closed"
                         self._writing_closed = True
                         # Check for exceptions even after EOF
                         return self._buffer.get_next(-1)
@@ -269,7 +266,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 raise self._exc_to_consumer.get_nowait()
             if next_el is _EOF:
                 self._finished_reading.set()
-                assert self._writing_closed, "notify_read_finish() called before EOF"
+                assert self._writing_closed, "EOF observed before send_eof() flagged _writing_closed"
                 self._writing_closed = True
                 if self._exc_to_consumer.is_set():
                     raise self._exc_to_consumer.get_nowait()
