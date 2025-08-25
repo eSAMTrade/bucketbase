@@ -48,7 +48,7 @@ class BytesQueue:
                 if size != -1:
                     size -= available
             else:
-                result.append(buf[start : start + size])
+                result.append(buf[start: start + size])
                 self._read_pos += size
                 size = 0
         if result:
@@ -156,10 +156,20 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             self._exc_to_consumer = exc
             self._writing_closed = True
         try:
-            self._q.put(_ErrorWrapper(exc), timeout=0.1)
+            self._q.put_nowait(_ErrorWrapper(exc))
         except queue.Full:
-            # Set the exception directly - it will be raised on next read attempt
-            pass
+            try:
+                while True:
+                    self._q.get_nowait()  # Drain existing items
+            except queue.Empty:
+                pass
+            try:
+                self._q.put_nowait(_ErrorWrapper(exc))
+                print(f"DEBUG: Successfully put _ErrorWrapper after draining")
+            except queue.Full:
+                # Last resort - put EOF to unblock the reader
+                print(f"DEBUG: Still can't put exception, sending EOF as fallback")
+                raise RuntimeError("Failed to propagate exception to reader")
 
     def on_consumer_fail(self, exc: BaseException):
         self._finish_event.set(exc)
