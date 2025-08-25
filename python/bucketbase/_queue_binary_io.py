@@ -4,7 +4,7 @@ import queue
 import threading
 from collections import deque
 from threading import Event
-from typing import Any, BinaryIO, Optional, Union
+from typing import Any, BinaryIO, Generic, Optional, TypeVar, Union
 
 try:
     from typing import override  # type: ignore
@@ -48,7 +48,7 @@ class BytesQueue:
                 if size != -1:
                     size -= available
             else:
-                result.append(buf[start: start + size])
+                result.append(buf[start : start + size])
                 self._read_pos += size
                 size = 0
         if result:
@@ -56,13 +56,16 @@ class BytesQueue:
         return b""
 
 
-class StatefulEvent:
+T = TypeVar("T")
+
+
+class StatefulEvent(Generic[T]):
     def __init__(self):
         self._event = threading.Event()
         self._lock = threading.Lock()
-        self._state: Optional[Any] = None
+        self._state: Optional[T] = None
 
-    def set(self, state: Any) -> None:
+    def set(self, state: T) -> None:
         """Sets the event flag and stores a state object. The state is immutable, so if called with another state, it will raise an exception."""
         with self._lock:
             if self._state is not None:
@@ -77,7 +80,7 @@ class StatefulEvent:
             return self._state
         return None
 
-    def get_nowait(self) -> Optional[Any]:
+    def get_nowait(self) -> Optional[T]:
         """Returns the state object if the event is set, otherwise returns None."""
         if self._event.is_set():
             return self._state
@@ -100,12 +103,14 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         self._q: queue.Queue[bytes | _EOFSentinel | _ErrorWrapper] = queue.Queue(maxsize=max_queue_size)
         self._closed_flag: bool = False
         self._writing_closed: bool = False
-        self._exc_to_consumer: Optional[BaseException] = None
+        self._exc_to_consumer: StatefulEvent[BaseException] = StatefulEvent()
         self._buffer = BytesQueue()
         self._finished_reading = Event()
-        self._finish_event = StatefulEvent()
+        self._finish_event: StatefulEvent[BaseException | object | None] = StatefulEvent()
         self._read_lock = threading.RLock()
         self._write_lock = threading.RLock()
+        # Track when exception should be checked - only after consuming pre-exception data
+        self._exception_check_enabled = False
 
     def feed(self, data: Union[bytes, bytearray, memoryview], timeout_sec: Optional[float] = None) -> None:
         with self._write_lock:
@@ -153,30 +158,17 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         if not isinstance(exc, BaseException):
             raise TypeError("fail() expects an exception instance")
         with self._write_lock:
-            self._exc_to_consumer = exc
             self._writing_closed = True
+            self._exc_to_consumer.set(exc)
+
+        # draing the queue first
+        while self._get_no_wait_next_chunk_or_none() is not None:
+            pass
+        # we expect no one is writing to the queue at this point from our thread
         try:
-            print("First put attempt")
-            self._q.put_nowait(_ErrorWrapper(exc))
-            print("First put succeeded")
+            self._q.put_nowait(_ErrorWrapper(exc))  # Wait up to 5 seconds
         except queue.Full:
-            try:
-                while True:
-                    self._q.get_nowait()  # Drain existing items
-            except queue.Empty:
-                print("Drained queue")
-            try:
-                print("Putting exception")
-                self._q.put_nowait(_ErrorWrapper(exc))
-                print("Second put succeeded")  # Add this line!
-            except queue.Full:
-                print("Second put also failed")
-                # Last resort - put EOF to unblock the reader
-                raise RuntimeError("Failed to propagate exception to reader")
-        # except BaseException:
-        #     print("Failed to propagate exception to reader")
-        #     raise
-        print("Exception propagated to reader")
+            raise RuntimeError(f"Failed to propagate exception to reader. Someone unexpected thread is putting data in the queue: {self._q.qsize()}")
 
     def on_consumer_fail(self, exc: BaseException):
         self._finish_event.set(exc)
@@ -197,12 +189,12 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 temp = self._get_no_wait_next_chunk_or_none()
 
             # If there's an exception set, we might have remaining data due to early termination
-            if self._exc_to_consumer is not None:
+            if self._exc_to_consumer.is_set():
                 # Clear any remaining data from queue and buffer when there's an exception
                 while temp is not None:
                     temp = self._get_no_wait_next_chunk_or_none()
                 self._buffer.get_next(-1)  # Clear buffer
-                raise self._exc_to_consumer
+                raise self._exc_to_consumer.get_nowait()
             else:
                 # Normal case - should be empty
                 assert temp is None, f"notify_read_finish() called before EOF, and queue contains {temp}"
@@ -212,7 +204,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             self._finish_event.set(QueueBinaryReadable.SUCCESS_FLAG)
 
     def _wait_finished_reading(self, timeout_sec: Optional[float] = None) -> None:
-        """ This method is used only for debug and testing purposes"""
+        """This method is used only for debug and testing purposes"""
         self._finished_reading.wait(timeout_sec)
 
     # ---- io.RawIOBase overrides ----
@@ -242,8 +234,8 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             if self._closed_flag:
                 raise ValueError("Stream is closed")
             # Check for exceptions even after reading is finished
-            if self._exc_to_consumer is not None:
-                raise self._exc_to_consumer
+            if self._exc_to_consumer.is_set():
+                raise self._exc_to_consumer.get_nowait()
             if self._finished_reading.is_set():
                 return b""
             if size == 0:
@@ -252,16 +244,16 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             if size is None or size < 0:
                 while True:
                     next_el = self._q.get()
+                    if self._exc_to_consumer.is_set():
+                        raise self._exc_to_consumer.get_nowait()
                     if next_el is _EOF:
                         self._finished_reading.set()
                         assert self._writing_closed, "notify_read_finish() called before EOF"
                         self._writing_closed = True
                         # Check for exceptions even after EOF
-                        if self._exc_to_consumer is not None:
-                            raise self._exc_to_consumer
                         return self._buffer.get_next(-1)
                     if isinstance(next_el, _ErrorWrapper):
-                        self._exc_to_consumer = next_el.exc
+                        self._exc_to_consumer.set(next_el.exc)
                         raise next_el.exc
                     assert isinstance(next_el, (bytes, bytearray, memoryview))
                     self._buffer.append(next_el)
@@ -272,16 +264,18 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 return remain_in_buffer
             assert len(remain_in_buffer) == 0
             next_el = self._q.get()
+            # Check for exceptions even after EOF
+            if self._exc_to_consumer.is_set():
+                raise self._exc_to_consumer.get_nowait()
             if next_el is _EOF:
                 self._finished_reading.set()
                 assert self._writing_closed, "notify_read_finish() called before EOF"
                 self._writing_closed = True
-                # Check for exceptions even after EOF
-                if self._exc_to_consumer is not None:
-                    raise self._exc_to_consumer
+                if self._exc_to_consumer.is_set():
+                    raise self._exc_to_consumer.get_nowait()
                 return b""
             if isinstance(next_el, _ErrorWrapper):
-                self._exc_to_consumer = next_el.exc
+                self._exc_to_consumer.set(next_el.exc)
                 raise next_el.exc
             assert isinstance(next_el, (bytes, bytearray, memoryview))
             assert len(next_el) > 0, f"read called with size: {size} and next_el is 0 bytes"
@@ -293,8 +287,8 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
     @override
     def readinto(self, b) -> int:
         with self._read_lock:
-            if self._exc_to_consumer is not None:
-                raise self._exc_to_consumer
+            if self._exc_to_consumer.is_set():
+                raise self._exc_to_consumer.get_nowait()
             # Optional fast-path; RawIOBase.read() would call this if we didn't override read()
             chunk = self.read(len(b))
             n = len(chunk)
