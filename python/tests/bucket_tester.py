@@ -405,30 +405,30 @@ class IBucketTester:
         background_threads = Queue()
         orig_put_object_stream = self.storage.put_object_stream
         expected_exc = Queue()
-        test_object:AsyncObjectWriter = None
-        try:
-            def throwing_put_object_stream(name, consumer_stream):
-                print("throwing_put_object_stream called")
-                # Track the current thread so we can wait for it to finish
-                current_thread = threading.current_thread()
-                background_threads.put(current_thread)
-                with consumer_stream as _stream:
-                    self.test_case.assertEqual(test_content_timeout, _stream.read(len(test_content_timeout)))
-                    try:
+
+        def throwing_put_object_stream(name, consumer_stream):
+            print("throwing_put_object_stream called")
+            # Track the current thread so we can wait for it to finish
+            current_thread = threading.current_thread()
+            background_threads.put(current_thread)
+            with consumer_stream as _stream:
+                self.test_case.assertEqual(test_content_timeout, _stream.read(len(test_content_timeout)))
+                try:
+                    buf = _stream.read(1)
+                    while buf != b"":
+                        print(f"throwing_put_object_stream: read {len(buf)} bytes")
                         buf = _stream.read(1)
-                        while buf != b"":
-                            print(f"throwing_put_object_stream: read {len(buf)} bytes")
-                            buf = _stream.read(1)
-                        print("All read... shouldn't get here...")
-                    except BaseException as e:
-                        print(f"throwing_put_object_stream: caught expected exception: {e}")
-                        expected_exc.put(e)
-                        print(f"throwing_put_object_stream: re-raising expected exception: {e}")
-                        raise
+                    print("All read... shouldn't get here...")
+                except BaseException as e:
+                    print(f"throwing_put_object_stream: caught expected exception: {e}")
+                    expected_exc.put(e)
+                    print(f"throwing_put_object_stream: re-raising expected exception: {e}")
+                    raise
 
-            self.storage.put_object_stream = throwing_put_object_stream
-
-            test_object = self.storage.open_write(path_timeout, timeout_sec=3)
+        test_object:AsyncObjectWriter = None
+        self.storage.put_object_stream = throwing_put_object_stream
+        try:
+            test_object = self.storage.open_write(path_timeout, timeout_sec=1)
             try:
                 with test_object as sink:
                     sink.write(test_content_timeout)
