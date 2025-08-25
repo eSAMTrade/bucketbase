@@ -59,14 +59,21 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         return self._queue_feeder
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        chained_exc = None
         if exc_val is not None:
-            self._consumer_stream.send_exception_to_reader(exc_val)
+            try:
+                self._consumer_stream.send_exception_to_reader(exc_val)
+            except BaseException as e:
+                chained_exc = e
         else:
             self._queue_feeder.close()  # This signals EOF to the reader
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
-        chained_exc = None
+
         if self._thread.is_alive():
-            chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
+            if chained_exc is not None:
+                chained_exc.__cause__ = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
+            else:
+                chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
         if self._exc is not None:
             if chained_exc is not None:
                 chained_exc.__cause__ = self._exc
