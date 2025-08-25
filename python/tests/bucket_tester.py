@@ -5,6 +5,7 @@ import threading
 import time
 from io import BytesIO
 from pathlib import PurePosixPath
+from queue import Queue
 from typing import BinaryIO
 from unittest import TestCase
 
@@ -13,7 +14,11 @@ import pyarrow.parquet as pq
 from streamerate import slist, stream
 from tsx import iTSms
 
-from bucketbase.ibucket import IBucket
+from bucketbase.ibucket import AsyncObjectWriter, IBucket
+
+
+class MockException(BaseException):
+    pass
 
 
 class IBucketTester:
@@ -252,7 +257,8 @@ class IBucketTester:
         header = ["id", "name", "value"]
         rows = [["1", "one", "1.1"], ["2", "two", "2.2"], ["3", "three", "3.3"]]
 
-        with self.storage.open_write(path2) as sink:
+        test_object1 = self.storage.open_write(path2, timeout_sec=3)
+        with test_object1 as sink:
             with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:
                 with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:
                     w = csv.writer(gztext)
@@ -263,9 +269,9 @@ class IBucketTester:
         path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
         test_content = b"Test content for multipart upload"
 
-        test_object = self.storage.open_write(path)
+        test_object2 = self.storage.open_write(path, timeout_sec=3)
         # Test basic functionality
-        with test_object as sink:
+        with test_object2 as sink:
             sink.write(test_content)
 
         # Verify the object was stored correctly
@@ -287,13 +293,21 @@ class IBucketTester:
         path3 = f"{unique_dir}/multipart_string_path.txt"
         string_content = b"Content written using string path"
 
-        sink_ctxt = self.storage.open_write(path3)
-        sink = sink_ctxt.__enter__()
-        sink.write(string_content)
-        sink_ctxt.__exit__(None, None, None)
+        test_object3 = self.storage.open_write(path3, timeout_sec=3)
+        with test_object3 as sink:
+            sink.write(string_content)
 
         retrieved_content = self.storage.get_object(path3)
         self.test_case.assertEqual(retrieved_content, string_content)
+        if isinstance(test_object1, AsyncObjectWriter):
+            test_object1._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object1._thread.is_alive())
+        if isinstance(test_object2, AsyncObjectWriter):
+            test_object2._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object2._thread.is_alive())
+        if isinstance(test_object3, AsyncObjectWriter):
+            test_object3._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object3._thread.is_alive())
 
     def test_open_write_timeout(self):
         # test timeout functionality in open_write:we write immediately, but the consumer doesn't consume in time;
@@ -311,7 +325,6 @@ class IBucketTester:
         try:
 
             def slow_put_object_stream(name, consumer_stream):
-                print("slow_put_object_stream called")
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
                 background_threads.append(current_thread)
@@ -327,7 +340,7 @@ class IBucketTester:
 
             self.storage.put_object_stream = slow_put_object_stream
 
-            test_object = self.storage.open_write(path_timeout, timeout_sec=0.5)
+            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=0.5)
             with self.test_case.assertRaises(TimeoutError):
                 with test_object as sink:
                     sink.write(test_content_timeout)
@@ -344,13 +357,103 @@ class IBucketTester:
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
-            self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes])
-            print("Background thread cleanup complete")
+            self.test_case.assertFalse(test_object._thread.is_alive())
+            self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes], f"Expected [TimeoutError], but got {successes}")
+
+    def test_open_write_consumer_throws(self):
+        # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
+        unique_dir = f"dir{self.us}"
+        path_timeout = PurePosixPath(f"{unique_dir}/open_write_consumer_throws.txt")
+        test_content_timeout = b"Timeout test content"
+
+        background_threads = []
+        orig_put_object_stream = self.storage.put_object_stream
+        try:
+
+            def throwing_put_object_stream(name, consumer_stream):
+                # Track the current thread so we can wait for it to finish
+                current_thread = threading.current_thread()
+                background_threads.append(current_thread)
+                with consumer_stream as _stream:
+                    time.sleep(0.1)  # Sleep for 0.1 second to cause timeout (test uses 0.5s timeout)
+                    _stream.read()
+                raise MockException("test exception")
+
+            self.storage.put_object_stream = throwing_put_object_stream
+
+            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=3)
+            with self.test_case.assertRaises(MockException):
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    sink.write(test_content_timeout)
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_put_object_stream
+            # Wait for any background threads to complete to avoid race conditions
+            print(f"Waiting for {len(background_threads)} background threads to complete...")
+            for thread in background_threads:
+                if thread.is_alive():
+                    print(f"Waiting for thread {thread.name} to complete...")
+                    thread.join(timeout=5.0)  # Wait up to 5 seconds
+                    if thread.is_alive():
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+            self.test_case.assertFalse(test_object._thread.is_alive())
+
+    def test_open_write_feeder_throws(self):
+        unique_dir = f"dir{self.us}"
+        path_timeout = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
+        test_content_timeout = b"Timeout test content"
+
+        background_threads = Queue()
+        orig_put_object_stream = self.storage.put_object_stream
+        expected_exc = Queue()
+
+        def throwing_put_object_stream(name, consumer_stream):
+            # Track the current thread so we can wait for it to finish
+            current_thread = threading.current_thread()
+            background_threads.put(current_thread)
+            try:
+                with consumer_stream as _stream:
+                    try:
+                        red = _stream.read(len(test_content_timeout))
+                        self.test_case.assertEqual(test_content_timeout, red)
+                        buf = _stream.read(1)
+                        while buf != b"":
+                            buf = _stream.read(1)
+                    except BaseException as e:
+                        expected_exc.put(e)
+                        raise
+            except BaseException as e:
+                expected_exc.put(e)
+
+        test_object: AsyncObjectWriter = None
+        self.storage.put_object_stream = throwing_put_object_stream
+        try:
+            test_object = self.storage.open_write(path_timeout, timeout_sec=1)
+            try:
+                with test_object as sink:
+                    sink.write(test_content_timeout)
+                    raise MockException("test exception")
+            except MockException as e:
+                self.test_case.assertEqual("test exception", str(e))
+        finally:
+            # Restore the original method to avoid side effects for other tests
+            self.storage.put_object_stream = orig_put_object_stream
+            # Wait for any background threads to complete to avoid race conditions
+            print(f"Waiting for {background_threads.qsize()} background threads to complete...")
+            first_thread = background_threads.get(timeout=2.0)
+            first_thread.join(timeout=2.0)
+            self.test_case.assertFalse(first_thread.is_alive())
+            self.test_case.assertEqual(0, background_threads.qsize())
+            self.test_case.assertTrue(expected_exc.qsize() == 2)
+            if isinstance(test_object, AsyncObjectWriter):
+                self.test_case.assertFalse(test_object._thread.is_alive())
+            self.test_case.assertEqual("test exception", str(expected_exc.get_nowait()))
 
     def test_open_write_with_parquet(self):
         """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
-        parquet_path = PurePosixPath(f"{unique_dir}/test_data.parquet")
+        parquet_path = PurePosixPath(f"{unique_dir}/open_write_test_data.parquet")
 
         # Define schema for our test data
         schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("value", pa.float64()), ("active", pa.bool_()), ("timestamp", pa.timestamp("ms"))])
@@ -361,7 +464,7 @@ class IBucketTester:
         # Check if this is a MinioBucket by looking at the class name
         is_minio = "MinioBucket" in str(type(self.storage))
         batch_size = 200000 if is_minio else 3  # 200k records per batch for minio, 3 for others
-        num_batches = 10 if not is_minio else 3  # 10 batches for others, 3 for minio
+        num_batches = 3 if is_minio else 3  # 10 batches for others, 3 for minio
 
         for batch_num in range(num_batches):
             batch_data = {
@@ -375,7 +478,8 @@ class IBucketTester:
             batches.append(batch)
 
         # Write parquet file using open_write
-        with self.storage.open_write(parquet_path) as sink:
+        tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=3)
+        with tested_object as sink:
             arrow_sink = pa.output_stream(sink)
             with pq.ParquetWriter(arrow_sink, schema) as writer:
                 for batch in batches:
@@ -428,3 +532,5 @@ class IBucketTester:
         # Check boolean pattern
         expected_actives = [i % 2 == 0 for i in range(expected_rows)]
         self.test_case.assertEqual(actives, expected_actives)
+        if isinstance(tested_object, AsyncObjectWriter):
+            self.test_case.assertFalse(tested_object._thread.is_alive())

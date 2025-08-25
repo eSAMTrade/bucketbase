@@ -44,7 +44,7 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
+class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
         self._consumer_stream = QueueBinaryReadable()
@@ -54,32 +54,45 @@ class AsyncObjectWriter(AbstractContextManager[BinaryIO]):
         self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
         self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
 
-    def __enter__(self) -> BinaryIO:
+    def __enter__(self) -> QueueBinaryWritable:
         self._thread.start()
         return self._queue_feeder
 
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
-        if exc_val is not None:
-            self._consumer_stream.send_exception_to_reader(exc_val)
-        else:
-            self._queue_feeder.close()  # This signals EOF to the reader
-        self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
+    def _raise_if_exception(self, exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
         chained_exc = None
-        if self._thread.is_alive():
-            chained_exc = TimeoutError(f"Timeout waiting for thread to finish writing {self._name}")
-        if self._exc is not None:
+        for e in exc_chain:
             if chained_exc is not None:
-                chained_exc.__cause__ = self._exc
-            else:
-                chained_exc = self._exc
-        if exc_val is not None:
-            if chained_exc is not None:
-                raise exc_val.with_traceback(exc_tb) from chained_exc
-            raise exc_val
+                e.__cause__ = chained_exc
+            chained_exc = e
         if chained_exc is not None:
+            if exc_val is not None:
+                raise exc_val.with_traceback(exc_tb) from chained_exc
             raise chained_exc
+        if exc_val is not None:
+            raise exc_val.with_traceback(exc_tb)
 
-        return False
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        exceptions_chain = []
+        if exc_val is not None:
+            try:
+                self._consumer_stream.send_exception_to_reader(exc_val)
+            except BaseException as e:
+                exceptions_chain.append(e)
+        else:
+            try:
+                self._queue_feeder.close()
+            except BaseException as e:
+                exceptions_chain.append(e)
+        self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
+
+        if self._thread.is_alive():
+            exceptions_chain.append(TimeoutError(f"Timeout waiting for thread to finish writing {self._name}"))
+        if self._exc is not None:
+            exceptions_chain.append(self._exc)
+
+        self._raise_if_exception(exceptions_chain, exc_val, exc_tb)
+
+        return None
 
     def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:

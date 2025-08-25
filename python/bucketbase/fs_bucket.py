@@ -127,7 +127,7 @@ class FSBucket(IBucket):
             with temp_obj_path.open("wb") as sink:
                 yield sink
             self._try_rename_tmp_file(temp_obj_path, _object_path)
-        except Exception:
+        except BaseException:
             # Clean up temporary file if something goes wrong
             if temp_obj_path.exists():
                 temp_obj_path.unlink(missing_ok=True)

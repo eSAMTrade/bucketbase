@@ -47,5 +47,11 @@ class TestIntegratedMinioBucket(TestCase):
     def test_open_write_timeout(self):
         self.tester.test_open_write_timeout()
 
+    def test_open_write_consumer_throws(self):
+        self.tester.test_open_write_consumer_throws()
+
+    def test_open_write_feeder_throws(self):
+        self.tester.test_open_write_feeder_throws()
+
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()
