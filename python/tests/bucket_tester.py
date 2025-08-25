@@ -257,7 +257,8 @@ class IBucketTester:
         header = ["id", "name", "value"]
         rows = [["1", "one", "1.1"], ["2", "two", "2.2"], ["3", "three", "3.3"]]
 
-        with self.storage.open_write(path2, timeout_sec=3) as sink:
+        test_object1 = self.storage.open_write(path2, timeout_sec=3)
+        with test_object1 as sink:
             with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:
                 with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:
                     w = csv.writer(gztext)
@@ -268,9 +269,9 @@ class IBucketTester:
         path = PurePosixPath(f"{unique_dir}/multipart_file.txt")
         test_content = b"Test content for multipart upload"
 
-        test_object = self.storage.open_write(path, timeout_sec=3)
+        test_object2 = self.storage.open_write(path, timeout_sec=3)
         # Test basic functionality
-        with test_object as sink:
+        with test_object2 as sink:
             sink.write(test_content)
 
         # Verify the object was stored correctly
@@ -292,16 +293,21 @@ class IBucketTester:
         path3 = f"{unique_dir}/multipart_string_path.txt"
         string_content = b"Content written using string path"
 
-        sink_ctxt = self.storage.open_write(path3, timeout_sec=3)
-        sink = sink_ctxt.__enter__()
-        sink.write(string_content)
-        sink_ctxt.__exit__(None, None, None)
+        test_object3 = self.storage.open_write(path3, timeout_sec=3)
+        with test_object3 as sink:
+            sink.write(string_content)
 
         retrieved_content = self.storage.get_object(path3)
         self.test_case.assertEqual(retrieved_content, string_content)
-        if isinstance(test_object, AsyncObjectWriter):
-            test_object._thread.join(timeout=1.0)
-            self.test_case.assertFalse(test_object._thread.is_alive())
+        if isinstance(test_object1, AsyncObjectWriter):
+            test_object1._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object1._thread.is_alive())
+        if isinstance(test_object2, AsyncObjectWriter):
+            test_object2._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object2._thread.is_alive())
+        if isinstance(test_object3, AsyncObjectWriter):
+            test_object3._thread.join(timeout=1.0)
+            self.test_case.assertFalse(test_object3._thread.is_alive())
 
     def test_open_write_timeout(self):
         # test timeout functionality in open_write:we write immediately, but the consumer doesn't consume in time;
@@ -319,7 +325,6 @@ class IBucketTester:
         try:
 
             def slow_put_object_stream(name, consumer_stream):
-                print("slow_put_object_stream called")
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
                 background_threads.append(current_thread)
@@ -354,7 +359,6 @@ class IBucketTester:
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
             self.test_case.assertFalse(test_object._thread.is_alive())
             self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes], f"Expected [TimeoutError], but got {successes}")
-            print("Background thread cleanup complete")
 
     def test_open_write_consumer_throws(self):
         # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
@@ -367,7 +371,6 @@ class IBucketTester:
         try:
 
             def throwing_put_object_stream(name, consumer_stream):
-                print("throwing_put_object_stream called")
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
                 background_threads.append(current_thread)
@@ -395,7 +398,6 @@ class IBucketTester:
                     if thread.is_alive():
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
             self.test_case.assertFalse(test_object._thread.is_alive())
-            print("Background thread cleanup complete")
 
     def test_open_write_feeder_throws(self):
         unique_dir = f"dir{self.us}"
@@ -407,25 +409,24 @@ class IBucketTester:
         expected_exc = Queue()
 
         def throwing_put_object_stream(name, consumer_stream):
-            print("throwing_put_object_stream called")
             # Track the current thread so we can wait for it to finish
             current_thread = threading.current_thread()
             background_threads.put(current_thread)
-            with consumer_stream as _stream:
-                self.test_case.assertEqual(test_content_timeout, _stream.read(len(test_content_timeout)))
-                try:
-                    buf = _stream.read(1)
-                    while buf != b"":
-                        print(f"throwing_put_object_stream: read {len(buf)} bytes")
+            try:
+                with consumer_stream as _stream:
+                    try:
+                        red = _stream.read(len(test_content_timeout))
+                        self.test_case.assertEqual(test_content_timeout, red)
                         buf = _stream.read(1)
-                    print("All read... shouldn't get here...")
-                except BaseException as e:
-                    print(f"throwing_put_object_stream: caught expected exception: {e}")
-                    expected_exc.put(e)
-                    print(f"throwing_put_object_stream: re-raising expected exception: {e}")
-                    raise
+                        while buf != b"":
+                            buf = _stream.read(1)
+                    except BaseException as e:
+                        expected_exc.put(e)
+                        raise
+            except BaseException as e:
+                expected_exc.put(e)
 
-        test_object:AsyncObjectWriter = None
+        test_object: AsyncObjectWriter = None
         self.storage.put_object_stream = throwing_put_object_stream
         try:
             test_object = self.storage.open_write(path_timeout, timeout_sec=1)
@@ -443,9 +444,8 @@ class IBucketTester:
             first_thread = background_threads.get(timeout=2.0)
             first_thread.join(timeout=2.0)
             self.test_case.assertFalse(first_thread.is_alive())
-            print("Background thread cleanup complete")
             self.test_case.assertEqual(0, background_threads.qsize())
-            self.test_case.assertEqual(1, expected_exc.qsize())
+            self.test_case.assertTrue(expected_exc.qsize() == 2)
             if isinstance(test_object, AsyncObjectWriter):
                 self.test_case.assertFalse(test_object._thread.is_alive())
             self.test_case.assertEqual("test exception", str(expected_exc.get_nowait()))
