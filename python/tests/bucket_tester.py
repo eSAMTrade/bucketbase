@@ -17,7 +17,7 @@ from tsx import iTSms
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
 
 
-class MockException(BaseException):
+class MockException(Exception):
     pass
 
 

@@ -143,6 +143,15 @@ class TestIBucket(TestCase):
         remained_objects = src_bucket.list_objects()
         self.assertEqual(remained_objects, [PurePosixPath("directory_file.txt")])
 
+    def test_copy_object_from(self):
+        src_bucket = MemoryBucket()
+        dst_bucket = MemoryBucket()
+
+        src_bucket.put_object("src_file.txt", b"content1")
+        dst_bucket.copy_object_from(src_bucket, "src_file.txt", "dst_file.txt")
+        self.assertTrue(dst_bucket.exists("dst_file.txt"))
+        self.assertEqual(dst_bucket.get_object("dst_file.txt"), b"content1")
+
     def test_open_write(self) -> None:
         """Test open_write method using MemoryBucket."""
         bucket = MemoryBucket()

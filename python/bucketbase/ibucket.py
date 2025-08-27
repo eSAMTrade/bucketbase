@@ -58,7 +58,8 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         self._thread.start()
         return self._queue_feeder
 
-    def _raise_if_exception(self, exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
+    @staticmethod
+    def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
         chained_exc = None
         for e in exc_chain:
             if chained_exc is not None:
@@ -66,6 +67,7 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
             chained_exc = e
         if chained_exc is not None:
             if exc_val is not None:
+                exc_val.__cause__ = chained_exc
                 raise exc_val.with_traceback(exc_tb) from chained_exc
             raise chained_exc
         if exc_val is not None:
@@ -76,12 +78,12 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         if exc_val is not None:
             try:
                 self._consumer_stream.send_exception_to_reader(exc_val)
-            except BaseException as e:
+            except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         else:
             try:
                 self._queue_feeder.close()
-            except BaseException as e:
+            except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
 
@@ -92,13 +94,11 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
 
         self._raise_if_exception(exceptions_chain, exc_val, exc_tb)
 
-        return None
-
     def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:
             self._bucket.put_object_stream(name, consumer_stream)
             consumer_stream.notify_upload_success()
-        except BaseException as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             consumer_stream.on_consumer_fail(e)
             self._exc = e
 
@@ -370,6 +370,13 @@ class IBucket(PydanticStrictValidated, ABC):
 
         max_threads = max(1, min(threads, len(src_objects)))
         src_objects.fastmap(_copy_object, poolSize=max_threads).size()
+
+    def copy_object_from(self, src_bucket: Self, src_name: PurePosixPath | str, dst_name: PurePosixPath | str) -> None:
+        """
+        Copies an object from src_bucket to self.
+        """
+        with src_bucket.get_object_stream(src_name) as stream:
+            self.put_object_stream(dst_name, stream)
 
     def move_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
