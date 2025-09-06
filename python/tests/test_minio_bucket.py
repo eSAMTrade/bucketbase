@@ -55,3 +55,6 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()
+
+    def test_streaming_failure_atomicity(self):
+        self.tester.test_streaming_failure_atomicity()

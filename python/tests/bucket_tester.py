@@ -1,17 +1,18 @@
 import csv
 import gzip
 import io
+import tempfile
 import threading
 import time
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from queue import Queue
 from typing import BinaryIO
 from unittest import TestCase
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from streamerate import slist, stream
+from streamerate import slist, stream as sstream
 from tsx import iTSms
 
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
@@ -19,6 +20,61 @@ from bucketbase.ibucket import AsyncObjectWriter, IBucket
 
 class MockException(Exception):
     pass
+
+
+class FailingStream(io.IOBase):
+    """A stream that fails after reading/writing a certain amount of data"""
+
+    def __init__(self, data: bytes, fail_after_bytes: int, fail_on_read: bool):
+        super().__init__()
+        self.data = data
+        self.fail_after_bytes = fail_after_bytes
+        self.fail_on_read = fail_on_read
+        self.bytes_processed = 0
+        self._is_closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._is_closed:
+            raise ValueError("I/O operation on closed stream")
+
+        if self.fail_on_read and self.bytes_processed >= self.fail_after_bytes:
+            raise MockException("Simulated stream read failure")
+
+        if size == -1:
+            remaining = self.data[self.bytes_processed :]
+            self.bytes_processed = len(self.data)
+        else:
+            end_pos = min(self.bytes_processed + size, len(self.data))
+            remaining = self.data[self.bytes_processed : end_pos]
+            self.bytes_processed = end_pos
+
+        if self.fail_on_read and self.bytes_processed > self.fail_after_bytes:
+            raise MockException("Simulated stream read failure")
+
+        return remaining
+
+    def write(self, data: bytes) -> int:
+        if self._is_closed:
+            raise ValueError("I/O operation on closed stream")
+
+        if not self.fail_on_read and self.bytes_processed >= self.fail_after_bytes:
+            raise MockException("Simulated stream write failure")
+
+        self.bytes_processed += len(data)
+        return len(data)
+
+    def close(self):
+        self._is_closed = True
+
+    @property
+    def closed(self):
+        return self._is_closed
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return True
 
 
 class IBucketTester:
@@ -94,15 +150,108 @@ class IBucketTester:
                 result = file.read()
         self.test_case.assertEqual(result, "Test\ncontent")
 
-        # Here we validate that we can put_object_stream directly from get_object_stream
-        path_out = PurePosixPath(f"{unique_dir}/file1_out.bin")
-        with self.storage.get_object_stream(path) as file:
-            self.validated_put_object_stream(path_out, file)
+    def test_streaming_failure_atomicity(self):
+        """
+        Test that failed streaming operations don't leave partial objects in the bucket.
+        This ensures atomicity - either the object is completely written or it doesn't exist.
+        """
+        unique_dir = f"dir{self.us}"
 
-        with self.storage.get_object_stream(path_out) as file:
-            with gzip.open(file, "rt") as file:
-                result = file.read()
-                self.test_case.assertEqual(result, "Test\ncontent")
+        # Test 1: put_object_stream with failing read stream
+        path1 = PurePosixPath(f"{unique_dir}/failed_stream_read.bin")
+        test_content = b"This is test content that should not be stored if stream fails"
+        failing_stream = FailingStream(test_content, fail_after_bytes=10, fail_on_read=True)
+
+        # Ensure object doesn't exist before test
+        self.test_case.assertFalse(self.storage.exists(path1))
+
+        # Attempt to put object with failing stream - should raise exception
+        with self.test_case.assertRaises(MockException):
+            self.storage.put_object_stream(path1, failing_stream)
+
+        # Object should NOT exist after failed operation
+        self.test_case.assertFalse(self.storage.exists(path1), "Object should not exist after failed put_object_stream")
+
+        # Test 2: open_write with failing write operation
+        path2 = PurePosixPath(f"{unique_dir}/failed_open_write.bin")
+
+        # Ensure object doesn't exist before test
+        self.test_case.assertFalse(self.storage.exists(path2))
+
+        # Attempt to write with failure during write operation
+        try:
+            with self.storage.open_write(path2, timeout_sec=1) as writer:
+                writer.write(b"Some initial data")
+                # Simulate failure during write operation
+                raise MockException("Simulated write failure")
+        except MockException:
+            pass  # Expected exception
+
+        # Object should NOT exist after failed operation
+        self.test_case.assertFalse(self.storage.exists(path2), "Object should not exist after failed open_write")
+
+        # Test 3: fput_object with non-existent file (should fail gracefully)
+        path3 = PurePosixPath(f"{unique_dir}/failed_fput.bin")
+        non_existent_file = Path("/non/existent/file.txt")
+
+        # Ensure object doesn't exist before test
+        self.test_case.assertFalse(self.storage.exists(path3))
+
+        # Attempt to fput non-existent file - should raise exception
+        with self.test_case.assertRaises((FileNotFoundError, IOError)):
+            self.storage.fput_object(path3, non_existent_file)
+
+        # Object should NOT exist after failed operation
+        self.test_case.assertFalse(self.storage.exists(path3), "Object should not exist after failed fput_object")
+
+        # Test 4: Test with corrupted/partial stream that fails mid-read
+        path4 = PurePosixPath(f"{unique_dir}/failed_partial_stream.bin")
+        large_content = b"A" * 1000 + b"B" * 1000 + b"C" * 1000  # 3KB content
+        partial_failing_stream = FailingStream(large_content, fail_after_bytes=1500, fail_on_read=True)
+
+        # Ensure object doesn't exist before test
+        self.test_case.assertFalse(self.storage.exists(path4))
+
+        # Attempt to put object with stream that fails mid-read
+        with self.test_case.assertRaises(MockException):
+            self.storage.put_object_stream(path4, partial_failing_stream)
+
+        # Object should NOT exist after failed operation
+        self.test_case.assertFalse(self.storage.exists(path4), "Object should not exist after failed partial stream read")
+
+        # Test 5: Test successful operation after failures (ensure bucket state is clean)
+        path5 = PurePosixPath(f"{unique_dir}/successful_after_failures.bin")
+        success_content = b"This should succeed after previous failures"
+        success_stream = BytesIO(success_content)
+
+        # This should succeed
+        self.storage.put_object_stream(path5, success_stream)
+
+        # Object should exist and have correct content
+        self.test_case.assertTrue(self.storage.exists(path5))
+        retrieved_content = self.storage.get_object(path5)
+        self.test_case.assertEqual(retrieved_content, success_content)
+
+        # Test 6: Test fput_object with file that gets deleted during operation
+        path6 = PurePosixPath(f"{unique_dir}/failed_fput_deleted_file.bin")
+
+        # Create a temporary file
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(b"Temporary file content")
+            temp_file_path = Path(temp_file.name)
+
+        # Delete the file before trying to fput it
+        temp_file_path.unlink()
+
+        # Ensure object doesn't exist before test
+        self.test_case.assertFalse(self.storage.exists(path6))
+
+        # Attempt to fput deleted file - should raise exception
+        with self.test_case.assertRaises((FileNotFoundError, IOError)):
+            self.storage.fput_object(path6, temp_file_path)
+
+        # Object should NOT exist after failed operation
+        self.test_case.assertFalse(self.storage.exists(path6), "Object should not exist after failed fput_object with deleted file")
 
         # inexistent path
         path = f"{unique_dir}/inexistent.txt"
@@ -227,7 +376,8 @@ class IBucketTester:
                 content = f"Content {i}".encode("utf-8")
                 self.storage.put_object(path, content)
 
-            stream(range(2025)).fastmap(upload_file, poolSize=100).to_list()
+            stream_obj = sstream(range(2025))
+            stream_obj.fastmap(upload_file, poolSize=100).to_list()
         return self.PATH_WITH_2025_KEYS
 
     def test_get_size(self):
@@ -279,8 +429,8 @@ class IBucketTester:
         self.test_case.assertEqual(retrieved_content, test_content)
 
         obj_stream = self.storage.get_object_stream(path2)
-        with obj_stream as stream:
-            with gzip.open(stream, "rt") as gztext:
+        with obj_stream as _stream:
+            with gzip.open(_stream, "rt") as gztext:
                 reader = csv.reader(gztext)
                 retrieved_rows = list(reader)
         self.test_case.assertEqual([header] + rows, retrieved_rows)
@@ -300,14 +450,14 @@ class IBucketTester:
         retrieved_content = self.storage.get_object(path3)
         self.test_case.assertEqual(retrieved_content, string_content)
         if isinstance(test_object1, AsyncObjectWriter):
-            test_object1._thread.join(timeout=1.0)
-            self.test_case.assertFalse(test_object1._thread.is_alive())
+            test_object1._thread.join(timeout=1.0)  # pylint: disable=W0212
+            self.test_case.assertFalse(test_object1._thread.is_alive())  # pylint: disable=W0212
         if isinstance(test_object2, AsyncObjectWriter):
-            test_object2._thread.join(timeout=1.0)
-            self.test_case.assertFalse(test_object2._thread.is_alive())
+            test_object2._thread.join(timeout=1.0)  # pylint: disable=W0212
+            self.test_case.assertFalse(test_object2._thread.is_alive())  # pylint: disable=W0212
         if isinstance(test_object3, AsyncObjectWriter):
-            test_object3._thread.join(timeout=1.0)
-            self.test_case.assertFalse(test_object3._thread.is_alive())
+            test_object3._thread.join(timeout=1.0)  # pylint: disable=W0212
+            self.test_case.assertFalse(test_object3._thread.is_alive())  # pylint: disable=W0212
 
     def test_open_write_timeout(self):
         # test timeout functionality in open_write:we write immediately, but the consumer doesn't consume in time;
@@ -333,9 +483,9 @@ class IBucketTester:
                         time.sleep(1.0)  # Sleep for 1 second to cause timeout (test uses 0.5s timeout)
                         _stream.read()
                     successes.append("no_exception")
-                except BaseException as e:
-                    print(f"slow_put_object_stream exception: {e}")
-                    successes.append(e)
+                except BaseException as exc:  # renamed 'e' to 'exc' for clarity
+                    print(f"slow_put_object_stream exception: {exc}")
+                    successes.append(exc)
                 print("slow_put_object_stream done")
 
             self.storage.put_object_stream = slow_put_object_stream

@@ -86,17 +86,23 @@ class FSBucket(IBucket):
             temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
             with temp_obj_path.open("wb") as f:
                 while chunk := stream.read(self.BUFFER_SIZE):
-                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written,
-                    #       since bottleneck is IO: https://github.com/eSAMTrade/bucketbase/issues/134
+                    # NOTE: Optimization possible: perform the read of the next chunk in async, while the current chunk is being written.
+                    # See: https://github.com/eSAMTrade/bucketbase/issues/134
                     f.write(chunk)
             self._try_rename_tmp_file(temp_obj_path, _object_path)
         except FileNotFoundError as exc:
+            # Clean up temporary file on failure
+            temp_obj_path.unlink(missing_ok=True)
             if os.name == "nt":
                 if len(str(_object_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
                     raise ValueError(
                         "Reduce the Minio cache path length, Windows has limitation on the path length. "
                         "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
                     ) from exc
+            raise
+        except Exception:
+            # Clean up temporary file on any other failure
+            temp_obj_path.unlink(missing_ok=True)
             raise
 
     def _try_rename_tmp_file(self, tmp_file_path: Path, object_path: Path) -> None:

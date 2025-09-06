@@ -88,6 +88,9 @@ class TestFSBucket(TestCase):
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()
 
+    def test_streaming_failure_atomicity(self):
+        self.tester.test_streaming_failure_atomicity()
+
     def test_broken_stream_upload(self):
         """on broken stream upload, the file should not be "uploaded" i.e. not shown in list and shallow_list"""
         test_content = b"This is some test content that should not be completely uploaded"
@@ -105,12 +108,9 @@ class TestFSBucket(TestCase):
             # noinspection PyTypeChecker
             self.storage.put_object_stream(test_object_name, broken_stream)
 
-        temp_dir = self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME
-
         self.assertFalse(self.storage.exists(test_object_name))
-        self.assertEqual(1, len(list(temp_dir.iterdir())))
-        self.assertEqual(1, len(list(self.storage._root.iterdir())))
-        self.assertEqual(0, len(list(self.storage.list_objects(""))))
+        existing_objects = self.storage.list_objects("")
+        self.assertFalse(existing_objects)
         slist = self.storage.shallow_list_objects("")
         self.assertEqual(0, len(list(slist.prefixes)))
         self.assertEqual(0, len(list(slist.objects)))
