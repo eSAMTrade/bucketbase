@@ -111,13 +111,17 @@ class MemoryBucket(IBucket):
         _name = self._validate_name(name)
 
         sink = _NonClosingBytesIO()
+        exception_occurred = False
         try:
             yield sink
+        except BaseException:
+            exception_occurred = True
+            raise
         finally:
             # Attempt to read buffer regardless of prior close by pyarrow
             try:
                 sink.flush()
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
             try:
                 content = sink.getvalue()
@@ -128,7 +132,9 @@ class MemoryBucket(IBucket):
                 else:
                     try:
                         sink.close()
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-exception-caught
                         pass
-            with self._lock:
-                self._objects[_name] = content
+            # Only store content if no exception occurred
+            if not exception_occurred:
+                with self._lock:
+                    self._objects[_name] = content
