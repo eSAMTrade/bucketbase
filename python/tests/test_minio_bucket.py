@@ -58,3 +58,12 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_streaming_failure_atomicity(self):
         self.tester.test_streaming_failure_atomicity()
+
+    def test_put_object_stream_exception_cleanup(self):
+        self.tester.test_put_object_stream_exception_cleanup()
+
+    def test_open_write_partial_write_exception_cleanup(self):
+        self.tester.test_open_write_partial_write_exception_cleanup()
+
+    def test_open_write_without_proper_close(self):
+        self.tester.test_open_write_without_proper_close()

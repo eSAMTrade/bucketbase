@@ -12,7 +12,8 @@ from unittest import TestCase
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from streamerate import slist, stream as sstream
+from streamerate import slist
+from streamerate import stream as sstream
 from tsx import iTSms
 
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
@@ -77,7 +78,7 @@ class FailingStream(io.IOBase):
         return True
 
 
-class IBucketTester:
+class IBucketTester:  # pylint: disable=too-many-public-methods
     INVALID_PREFIXES = ["/", "/dir", "dir1//dir2", "dir1//", "star*1", "dir1/a\file.txt", "at@gmail", "sharp#1", "dollar$1", "comma,"]
     PATH_WITH_2025_KEYS = "test-dir-with-2025-keys/"
 
@@ -474,7 +475,7 @@ class IBucketTester:
         successes = []
         try:
 
-            def slow_put_object_stream(name, consumer_stream):
+            def slow_put_object_stream(name, consumer_stream):  # pylint: disable=unused-argument
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
                 background_threads.append(current_thread)
@@ -483,7 +484,7 @@ class IBucketTester:
                         time.sleep(1.0)  # Sleep for 1 second to cause timeout (test uses 0.5s timeout)
                         _stream.read()
                     successes.append("no_exception")
-                except BaseException as exc:  # renamed 'e' to 'exc' for clarity
+                except BaseException as exc:  # pylint: disable=broad-exception-caught
                     print(f"slow_put_object_stream exception: {exc}")
                     successes.append(exc)
                 print("slow_put_object_stream done")
@@ -507,7 +508,7 @@ class IBucketTester:
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
-            self.test_case.assertFalse(test_object._thread.is_alive())
+            self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
             self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes], f"Expected [TimeoutError], but got {successes}")
 
     def test_open_write_consumer_throws(self):
@@ -520,7 +521,7 @@ class IBucketTester:
         orig_put_object_stream = self.storage.put_object_stream
         try:
 
-            def throwing_put_object_stream(name, consumer_stream):
+            def throwing_put_object_stream(name, consumer_stream):  # pylint: disable=unused-argument
                 # Track the current thread so we can wait for it to finish
                 current_thread = threading.current_thread()
                 background_threads.append(current_thread)
@@ -547,7 +548,7 @@ class IBucketTester:
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
                         raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
-            self.test_case.assertFalse(test_object._thread.is_alive())
+            self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
 
     def test_open_write_feeder_throws(self):
         unique_dir = f"dir{self.us}"
@@ -558,7 +559,7 @@ class IBucketTester:
         orig_put_object_stream = self.storage.put_object_stream
         expected_exc = Queue()
 
-        def throwing_put_object_stream(name, consumer_stream):
+        def throwing_put_object_stream(name, consumer_stream):  # pylint: disable=unused-argument
             # Track the current thread so we can wait for it to finish
             current_thread = threading.current_thread()
             background_threads.put(current_thread)
@@ -573,7 +574,7 @@ class IBucketTester:
                     except BaseException as e:
                         expected_exc.put(e)
                         raise
-            except BaseException as e:
+            except BaseException as e:  # pylint: disable=broad-exception-caught
                 expected_exc.put(e)
 
         test_object: AsyncObjectWriter = None
@@ -597,10 +598,10 @@ class IBucketTester:
             self.test_case.assertEqual(0, background_threads.qsize())
             self.test_case.assertTrue(expected_exc.qsize() == 2)
             if isinstance(test_object, AsyncObjectWriter):
-                self.test_case.assertFalse(test_object._thread.is_alive())
+                self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
             self.test_case.assertEqual("test exception", str(expected_exc.get_nowait()))
 
-    def test_open_write_with_parquet(self):
+    def test_open_write_with_parquet(self):  # pylint: disable=too-many-locals
         """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
         parquet_path = PurePosixPath(f"{unique_dir}/open_write_test_data.parquet")
@@ -683,4 +684,133 @@ class IBucketTester:
         expected_actives = [i % 2 == 0 for i in range(expected_rows)]
         self.test_case.assertEqual(actives, expected_actives)
         if isinstance(tested_object, AsyncObjectWriter):
-            self.test_case.assertFalse(tested_object._thread.is_alive())
+            self.test_case.assertFalse(tested_object._thread.is_alive())  # pylint: disable=W0212
+
+    def test_put_object_stream_exception_cleanup(self):
+        """
+        Test that when put_object_stream fails (stream raises exception during read),
+        the file is NOT visible in list_objects.
+
+        BUG: MinioBucket may fail this test because partial uploads might be visible.
+        """
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/stream_exception_test.txt")
+        test_content = b"A" * 1000  # 1KB of data
+
+        # Create a stream that fails after reading some data
+        failing_stream = FailingStream(test_content, fail_after_bytes=500, fail_on_read=True)
+
+        # Ensure the object doesn't exist before the test
+        self.test_case.assertFalse(self.storage.exists(test_path))
+
+        # Attempt to put object with failing stream
+        with self.test_case.assertRaises(MockException):
+            self.storage.put_object_stream(test_path, failing_stream)
+
+        # The critical assertion: object should NOT exist after failed stream
+        self.test_case.assertFalse(self.storage.exists(test_path), "Object should not exist after put_object_stream failure")
+
+        # Also verify it's not in list_objects
+        objects = self.storage.list_objects(unique_dir)
+        self.test_case.assertFalse(objects, "Object should not appear in list_objects after failed write")
+
+    def test_open_write_partial_write_exception_cleanup(self):
+        """
+        Test that when an exception occurs after writing some data (but not closing properly),
+        the file is NOT visible in list_objects.
+
+        This simulates a scenario where:
+        1. Writer starts writing data
+        2. Some data is written successfully
+        3. An exception occurs before the write completes
+        4. The object should NOT be visible in listings
+
+        BUG: MinioBucket and MemoryBucket fail this test.
+        """
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/partial_write_test.txt")
+
+        # Ensure the object doesn't exist before the test
+        self.test_case.assertFalse(self.storage.exists(test_path))
+
+        # Write some data, then raise an exception
+        with self.test_case.assertRaises(MockException):
+            with self.storage.open_write(test_path, timeout_sec=5) as writer:
+                # Write multiple chunks
+                writer.write(b"First chunk of data\n")
+                writer.write(b"Second chunk of data\n")
+                writer.write(b"Third chunk of data\n")
+                # Simulate an error during writing
+                raise MockException("Error during multi-chunk write")
+
+        # Object should NOT exist
+        self.test_case.assertFalse(self.storage.exists(test_path), "Object should not exist after exception during multi-chunk write")
+
+        # Verify not in list_objects
+        objects = self.storage.list_objects(unique_dir)
+        self.test_case.assertFalse(objects, "Object should not appear in list_objects after failed write")
+
+    def test_open_write_without_proper_close(self):
+        """
+        Test that simulates not properly closing the file during open_write.
+        This is closer to the real-world scenario where a file handle is not closed properly.
+
+        The test verifies that if we don't exit the context manager normally (e.g., due to an exception),
+        the file should NOT be visible in list_objects.
+
+        BUG: This is the main bug reported - MinioBucket may leave partial files visible.
+        """
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/not_properly_closed.txt")
+
+        # Ensure the object doesn't exist before the test
+        self.test_case.assertFalse(self.storage.exists(test_path))
+
+        # Simulate not properly closing by raising exception
+        writer_manager = self.storage.open_write(test_path, timeout_sec=5)
+        writer = writer_manager.__enter__()  # pylint: disable=C2801
+        # Write multiple chunks
+        writer.write(b"First chunk of data\n")
+        writer.write(b"Second chunk of data\n")
+        writer.write(b"Third chunk of data\n")
+        writer.flush()
+        writer.flush()
+
+        # Object should NOT exist after failed write
+        self.test_case.assertFalse(self.storage.exists(test_path), "Object should not exist when file was not properly closed due to exception")
+
+        # Verify not in list_objects
+        objects = self.storage.list_objects(unique_dir)
+        self.test_case.assertFalse(objects, f"list_objects should return empty list, got {objects}")
+        writer_manager.__exit__(None, None, None)
+
+    def test_open_write_sync_exception_cleanup(self):
+        """
+        Test that when an exception is raised during open_write_sync, the file is NOT visible in list_objects.
+        This tests the synchronous version of open_write (if available).
+
+        BUG: MemoryBucket.open_write_sync has a bug where it stores content even when an exception occurs.
+        """
+        # Check if the storage has open_write_sync method
+        self.test_case.assertTrue(hasattr(self.storage, "open_write_sync"), "Storage does not have open_write_sync method")
+
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/sync_exception_test.txt")
+        test_content = b"This content should not be stored due to exception"
+
+        # Ensure the object doesn't exist before the test
+        self.test_case.assertFalse(self.storage.exists(test_path))
+
+        # Attempt to write with an exception raised during writing
+        with self.test_case.assertRaises(MockException):
+            with self.storage.open_write_sync(test_path) as writer:
+                writer.write(test_content)
+                # Raise an exception before the context manager exits normally
+                raise MockException("Simulated write failure in sync mode")
+
+        # The critical assertion: object should NOT exist after failed write
+        self.test_case.assertFalse(self.storage.exists(test_path), "Object should not exist after exception during open_write_sync")
+
+        # Also verify it's not in list_objects
+        objects = self.storage.list_objects(unique_dir)
+        self.test_case.assertFalse(objects, f"list_objects should return empty list, got {objects}")
