@@ -67,3 +67,6 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_open_write_without_proper_close(self):
         self.tester.test_open_write_without_proper_close()
+
+    def test_regression_parquet_by_AMX(self):
+        self.tester.test_regression_parquet_by_AMX()

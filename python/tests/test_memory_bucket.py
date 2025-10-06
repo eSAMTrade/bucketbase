@@ -59,3 +59,6 @@ class TestMemoryBucket(TestCase):
 
     def test_open_write_sync_exception_cleanup(self):
         self.tester.test_open_write_sync_exception_cleanup()
+
+    def test_regression_parquet_by_AMX(self):
+        self.tester.test_regression_parquet_by_AMX()

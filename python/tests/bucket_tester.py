@@ -814,3 +814,29 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         # Also verify it's not in list_objects
         objects = self.storage.list_objects(unique_dir)
         self.test_case.assertFalse(objects, f"list_objects should return empty list, got {objects}")
+
+    def test_regression_parquet_by_AMX(self):
+        parquet_schema = pa.schema([("a", pa.int64())])
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/test_regression.parquet")
+
+        self.storage.remove_objects([test_path])
+
+        writer_ctx = self.storage.open_write(test_path, timeout_sec=5.0)
+        writer = writer_ctx.__enter__()  # pylint: disable=C2801
+        arrow_sink: pa.NativeFile = pa.output_stream(writer)
+        parquet_writer = pq.ParquetWriter(writer, parquet_schema)
+
+        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)
+        parquet_writer.write_batch(batch)
+
+        existing = list(str(x) for x in self.storage.list_objects(test_path))
+        self.test_case.assertEqual(0, len(existing), f"exists (and must not; no flush yet): {existing}")
+
+        arrow_sink.close()
+
+        existing = list(str(x) for x in self.storage.list_objects(test_path))
+        self.test_case.assertEqual(0, len(existing), f"exists (after arrow close): {existing}")
+        writer_ctx.__exit__(RuntimeError, RuntimeError("test"), None)
+        existing = list(str(x) for x in self.storage.list_objects(test_path))
+        self.test_case.assertEqual(0, len(existing), f"exists (and must not, because of __exit__ with errir): {existing}")

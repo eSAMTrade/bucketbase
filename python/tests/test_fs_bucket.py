@@ -286,3 +286,6 @@ class TestFSBucket(TestCase):
             len(list(self.storage.list_objects(""))),
             f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}",
         )
+
+    def test_regression_parquet_by_AMX(self):
+        self.tester.test_regression_parquet_by_AMX()
