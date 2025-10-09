@@ -11,7 +11,9 @@ import urllib3
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
+from minio.helpers import MIN_PART_SIZE, MAX_PART_SIZE
 from multiminio import MultiMinio
+from pyxtension import validate
 from streamerate import slist as slist
 from streamerate import stream as sstream
 from urllib3 import BaseHTTPResponse
@@ -80,11 +82,18 @@ def build_minio_client(
 
 
 class MinioBucket(IBucket):
-    PART_SIZE = 16 * 1024 * 1024
+    # Default part size for multipart uploads (16 MiB)
+    # Increased from MinIO library default (5 MiB) for better performance and to allow for objects up to 160GiB
+    DEFAULT_PART_SIZE = 16 * 1024 * 1024
 
-    def __init__(self, bucket_name: str, minio_client: Minio) -> None:
+    def __init__(self, bucket_name: str, minio_client: Minio, part_size: int | None = None) -> None:
+        if part_size is None:
+            part_size = self.DEFAULT_PART_SIZE
+        validate(MIN_PART_SIZE <= part_size <= MAX_PART_SIZE,
+                 f"part_size must be between {MIN_PART_SIZE} and {MAX_PART_SIZE}", exc=ValueError)
         self._minio_client = minio_client
         self._bucket_name = bucket_name
+        self._part_size = part_size
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         with self.get_object_stream(name) as response:
@@ -134,7 +143,7 @@ class MinioBucket(IBucket):
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         _name = self._validate_name(name)
-        self._minio_client.put_object(bucket_name=self._bucket_name, object_name=_name, data=stream, length=-1, part_size=self.PART_SIZE)
+        self._minio_client.put_object(bucket_name=self._bucket_name, object_name=_name, data=stream, length=-1, part_size=self._part_size)
 
     def fput_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         _name = self._validate_name(name)
