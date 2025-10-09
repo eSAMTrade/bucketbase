@@ -11,7 +11,6 @@ import urllib3
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
-from minio.helpers import MIN_PART_SIZE
 from multiminio import MultiMinio
 from streamerate import slist as slist
 from streamerate import stream as sstream
@@ -81,7 +80,7 @@ def build_minio_client(
 
 
 class MinioBucket(IBucket):
-    PART_SIZE = MIN_PART_SIZE
+    PART_SIZE = 16 * 1024 * 1024
 
     def __init__(self, bucket_name: str, minio_client: Minio) -> None:
         self._minio_client = minio_client
