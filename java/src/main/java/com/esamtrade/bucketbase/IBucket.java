@@ -7,7 +7,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -27,6 +26,8 @@ public interface IBucket {
     byte[] getObject(PurePosixPath name) throws IOException;
 
     ObjectStream getObjectStream(PurePosixPath name) throws IOException;
+
+    long getSize(PurePosixPath name) throws IOException;
 
     List<PurePosixPath> listObjects(PurePosixPath prefix) throws IOException;
 
