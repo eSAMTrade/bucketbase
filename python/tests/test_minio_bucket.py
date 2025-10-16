@@ -72,6 +72,7 @@ class TestIntegratedMinioBucket(TestCase):
     def test_open_write_without_proper_close(self):
         self.tester.test_open_write_without_proper_close()
 
+<<<<<<< ours
     def _test_part_size_used(self, bucket: MinioBucket, expected_part_size: int):
         with patch.object(bucket._minio_client, "put_object") as mock_put:
             stream = io.BytesIO(b"test data")
@@ -98,3 +99,7 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_regression_parquet_by_AMX(self):
         self.tester.test_regression_parquet_by_AMX()
+=======
+    def test_close_writer_closed_on_error(self):
+        self.tester.test_close_writer_closed_on_error()
+>>>>>>> theirs

@@ -75,16 +75,16 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         exceptions_chain = []
+
         if exc_val is not None:
             try:
                 self._consumer_stream.send_exception_to_reader(exc_val)
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
-        else:
-            try:
-                self._queue_feeder.close()
-            except BaseException as e:  # pylint: disable=broad-exception-caught
-                exceptions_chain.append(e)
+        try:
+            self._queue_feeder.close()
+        except BaseException as e:  # pylint: disable=broad-exception-caught
+            exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
 
         if self._thread.is_alive():
