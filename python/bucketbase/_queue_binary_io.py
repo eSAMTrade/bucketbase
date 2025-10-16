@@ -136,6 +136,8 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         """Called from feeder to signal EOF"""
         with self._write_lock:
             self._writing_closed = True
+            if self._exc_to_consumer.is_set():
+                return
         self._q.put(_EOF, timeout=timeout_sec)
 
     def wait_upload_success_or_raise(self, timeout_sec: Optional[float] = None) -> None:
@@ -322,11 +324,13 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
 
     @override
     def close(self) -> None:
-        if not self.closed:
-            self._closed = True
-            self._consumer_stream.send_eof(self._timeout_sec)  # Signal EOF first
-            self._consumer_stream.wait_upload_success_or_raise(timeout_sec=self._timeout_sec)  # Then wait for upload
-        super().close()
+        try:
+            if not self.closed:
+                self._closed = True
+                self._consumer_stream.send_eof(self._timeout_sec)  # Signal EOF first
+                self._consumer_stream.wait_upload_success_or_raise(timeout_sec=self._timeout_sec)  # Then wait for upload
+        finally:
+            super().close()
 
     def __del__(self):
         try:

@@ -91,6 +91,21 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
     def cleanup(self):
         self.storage.remove_prefix(f"dir{self.us}")
 
+    def test_close_writer_closed_on_error(self) -> None:
+        """Verify that the writer stream is closed after raising inside open_write."""
+        file_name = PurePosixPath(f"dir{self.us}/close_on_error_test.txt")
+        writer = self.storage.open_write(file_name, timeout_sec=5.0)
+        stream_ref = None
+        try:
+            with writer as pq_writer:
+                stream_ref = pq_writer
+                raise RuntimeError("Simulated error during parquet write")
+        except RuntimeError:
+            pass
+        # Ensure we actually captured the stream and it was closed
+        self.test_case.assertIsNotNone(stream_ref, "Stream reference was not captured")
+        self.test_case.assertTrue(getattr(stream_ref, "closed", False), "Stream should be closed after exiting context manager")
+
     def test_put_and_get_object(self):
         unique_dir = f"dir{self.us}"
         # binary content

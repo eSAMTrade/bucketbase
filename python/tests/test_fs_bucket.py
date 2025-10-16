@@ -287,5 +287,10 @@ class TestFSBucket(TestCase):
             f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}",
         )
 
+<<<<<<< ours
     def test_regression_parquet_by_AMX(self):
         self.tester.test_regression_parquet_by_AMX()
+=======
+    def test_close_writer_closed_on_error(self):
+        self.tester.test_close_writer_closed_on_error()
+>>>>>>> theirs
