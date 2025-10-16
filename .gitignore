@@ -206,6 +206,3 @@ bin/
 
 ### Mac OS ###
 .DS_Store
-
-#Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
