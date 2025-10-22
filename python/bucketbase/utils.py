@@ -15,18 +15,17 @@ class NoOwnershipIO:
 
     Rules:
         - Closing the wrapper marks *only the wrapper* as closed; the base stays open.
-        - When the wrapper is closed, write/flush/seek/tell/read operations raise ValueError.
+        - When the wrapper is closed, write/flush/seek/tell/read,etc. operations raise ValueError.
     """
 
-    def __init__(self, base, promise_not_to_cache: bool = False):
-        # Duck typing: ensure base has the required meth    ods and attributes
+    def __init__(self, base):
+        # Duck typing: ensure base has the required methods and attributes
         required_attrs = ["close", "write", "flush", "closed"]
         for attr in required_attrs:
             if not hasattr(base, attr):
                 raise TypeError(f"base must be a stream-like object with '{attr}' method/attribute")
         self._base = base
         self._closed: bool = False
-        self._promise_not_to_cache = promise_not_to_cache
 
     def close(self) -> None:  # swallow close
         self._closed = True
@@ -39,21 +38,6 @@ class NoOwnershipIO:
         if self.closed:
             raise ValueError("I/O operation on closed file")
 
-    # these 2 are looked up on the class only, not instance attributes
-    def __iter__(self):
-        self._if_open()
-        return self
-
-    def __next__(self):
-        self._if_open()
-        return next(self._base)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
     def __getattr__(self, name):
         """Delegate attribute access to base stream with closed-state guard.
 
@@ -63,7 +47,7 @@ class NoOwnershipIO:
         attr = getattr(self._base, name)  # Raises AttributeError if missing
 
         # pylint: disable=no-else-return
-        if not self._promise_not_to_cache and callable(attr):
+        if callable(attr):
             # Return a lambda that checks closed state on EVERY invocation
             def guarded_call(*args, **kwargs):
                 self._if_open()
@@ -74,3 +58,19 @@ class NoOwnershipIO:
             # For non-callable attributes (e.g., name, mode), check now
             self._if_open()
             return attr
+
+    # these 2 are looked up on the class only, not instance attributes
+    def __iter__(self):
+        self._if_open()
+        return self
+
+    def __next__(self):
+        self._if_open()
+        return next(self._base)
+
+    # base is not a context manager, implement it here
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

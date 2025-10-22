@@ -64,7 +64,7 @@ class TestNoOwnershipIO(unittest.TestCase):
             wrapper.read()
         self.assertIn("closed", str(ctx.exception).lower())
 
-    def test_capability_checks_return_false_after_wrapper_closed(self):
+    def test_capability_checks_raise_after_wrapper_closed(self):
         """readable/writable/seekable/isatty raise ValueError after wrapper closed."""
         base = io.BytesIO(b"test")
         wrapper = NoOwnershipIO(base)
