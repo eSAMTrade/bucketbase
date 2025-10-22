@@ -71,6 +71,7 @@ class NonClosingStream:
 
     # base is not a context manager, implement it here
     def __enter__(self):
+        self._if_open()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
