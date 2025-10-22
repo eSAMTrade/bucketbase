@@ -227,7 +227,7 @@ class TestNoOwnershipIO(unittest.TestCase):
 
         base = DuckTypedIO()
         # Should not raise TypeError
-        wrapper = NoOwnershipIO(base)
+        wrapper = NoOwnershipIO(base, required_attrs=["close", "write", "flush", "closed"])
         self.assertIsNotNone(wrapper)
 
     def test_write_flush_sequence_after_close_raises(self):

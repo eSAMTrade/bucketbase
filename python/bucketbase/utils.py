@@ -21,6 +21,7 @@ class NoOwnershipIO:
 
     def __init__(self, base, required_attrs=None):
         # Duck typing: ensure base has the required methods and attributes
+        required_attrs = (required_attrs or []) + ["close", "closed"]
         for attr in required_attrs or []:
             if not hasattr(base, attr):
                 raise TypeError(f"base must be a stream-like object with '{attr}' method/attribute")
