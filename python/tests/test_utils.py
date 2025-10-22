@@ -296,5 +296,18 @@ class TestNoOwnershipIO(unittest.TestCase):
         self.assertIn("closed", str(ctx.exception).lower())
 
 
+    def test_force_base_close_method(self):
+        """force_base_close method closes the underlying base stream."""
+        base = io.BytesIO()
+        wrapper = NonClosingStream(base)
+
+        self.assertFalse(base.closed)
+
+        wrapper.force_base_close()
+
+        self.assertTrue(base.closed)
+        self.assertTrue(wrapper.closed)  # Wrapper remains open
+
+
 if __name__ == "__main__":
     unittest.main()

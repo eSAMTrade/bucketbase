@@ -46,7 +46,7 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
+class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
         self._consumer_stream = QueueBinaryReadable()
@@ -54,11 +54,12 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         self._exc: Optional[BaseException] = None
         self._timeout_sec = timeout_sec
         self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._wrapped_stream = NonClosingStream(self._queue_feeder)
         self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
 
-    def __enter__(self) -> QueueBinaryWritable:
+    def __enter__(self) -> NonClosingStream:
         self._thread.start()
-        return NonClosingStream(self._queue_feeder)
+        return self._wrapped_stream
 
     @staticmethod
     def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
@@ -84,7 +85,7 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
                 exceptions_chain.append(e)
         else:
             try:
-                self._queue_feeder.close()
+                self._wrapped_stream.force_base_close()
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish

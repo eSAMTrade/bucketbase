@@ -76,3 +76,8 @@ class NonClosingStream:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def force_base_close(self) -> None:
+        """Force close the underlying base stream."""
+        self._closed = True
+        self._base.close()
