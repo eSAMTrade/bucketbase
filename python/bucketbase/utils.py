@@ -4,7 +4,7 @@ from typing import final
 
 
 @final
-class NoOwnershipIO:
+class NonClosingStream:
     """
     A thin delegating wrapper around a file-like object that prevents
     closing the underlying stream.
