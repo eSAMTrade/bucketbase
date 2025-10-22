@@ -16,6 +16,8 @@ from typing_extensions import Self
 from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
 
+from bucketbase.utils import NoOwnershipIO
+
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
 S3_NAME_CHARS_NO_SEP = r"\w!\-\.')("
@@ -56,7 +58,7 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
 
     def __enter__(self) -> QueueBinaryWritable:
         self._thread.start()
-        return self._queue_feeder
+        return NoOwnershipIO(self._queue_feeder)
 
     @staticmethod
     def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
