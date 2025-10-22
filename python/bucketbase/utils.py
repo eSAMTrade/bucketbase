@@ -16,12 +16,12 @@ class NoOwnershipIO:
     Rules:
         - Closing the wrapper marks *only the wrapper* as closed; the base stays open.
         - When the wrapper is closed, write/flush/seek/tell/read,etc. operations raise ValueError.
+        - Not thread-safe: concurrent access to the same wrapper instance requires external synchronization.
     """
 
-    def __init__(self, base):
+    def __init__(self, base, required_attrs=None):
         # Duck typing: ensure base has the required methods and attributes
-        required_attrs = ["close", "write", "flush", "closed"]
-        for attr in required_attrs:
+        for attr in required_attrs or []:
             if not hasattr(base, attr):
                 raise TypeError(f"base must be a stream-like object with '{attr}' method/attribute")
         self._base = base

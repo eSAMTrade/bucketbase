@@ -110,6 +110,7 @@ class TestNoOwnershipIO(unittest.TestCase):
         finally:
             base.close()
             import os
+
             os.unlink(base.name)
 
     def test_closed_property_reflects_both_wrapper_and_base(self):
@@ -203,11 +204,31 @@ class TestNoOwnershipIO(unittest.TestCase):
         with self.assertRaises(ValueError):
             wrapper.readinto(buffer2)
 
-    def test_init_validates_base_is_io_base(self):
+    def test_init_validates_attribute_requirements(self):
         """Constructor validates base is io.IOBase compatible."""
         with self.assertRaises(TypeError) as ctx:
             NoOwnershipIO("not a stream")  # type: ignore
         self.assertIn("base must be a stream-like object with ", str(ctx.exception))
+
+    def test_duck_typed_io_accepted(self):
+        """Duck-typed IO object with required methods is accepted."""
+        class DuckTypedIO:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                pass
+
+            def write(self, data):
+                pass
+
+            def flush(self):
+                pass
+
+        base = DuckTypedIO()
+        # Should not raise TypeError
+        wrapper = NoOwnershipIO(base)
+        self.assertIsNotNone(wrapper)
 
     def test_write_flush_sequence_after_close_raises(self):
         """Simulates PyArrow ParquetWriter close sequence after wrapper closed - now raises."""
@@ -256,7 +277,6 @@ class TestNoOwnershipIO(unittest.TestCase):
 
         wrapper2.close()
         self.assertFalse(base.closed)
- 
 
     def test_cached_methods_still_check_closed_state(self):
         """Cached method references still check closed state on every call."""
