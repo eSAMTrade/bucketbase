@@ -837,6 +837,9 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         existing = list(str(x) for x in self.storage.list_objects(test_path))
         self.test_case.assertEqual(0, len(existing), f"exists (after arrow close): {existing}")
-        writer_ctx.__exit__(RuntimeError, RuntimeError("test"), None)
+        try:
+            writer_ctx.__exit__(RuntimeError, RuntimeError("test"), None)
+        except RuntimeError:
+            pass
         existing = list(str(x) for x in self.storage.list_objects(test_path))
         self.test_case.assertEqual(0, len(existing), f"exists (and must not, because of __exit__ with errir): {existing}")
