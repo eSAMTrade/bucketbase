@@ -16,7 +16,7 @@ from typing_extensions import Self
 from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
 
-from bucketbase.utils import NonClosingStream 
+from bucketbase.utils import NonClosingStream
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
@@ -58,7 +58,7 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
 
     def __enter__(self) -> QueueBinaryWritable:
         self._thread.start()
-        return NonClosingStream (self._queue_feeder)
+        return NonClosingStream(self._queue_feeder)
 
     @staticmethod
     def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
