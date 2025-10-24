@@ -85,7 +85,7 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
                 exceptions_chain.append(e)
         else:
             try:
-                self._wrapped_stream.force_base_close()
+                self._wrapped_stream.close_base()
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish

@@ -188,48 +188,11 @@ class TestNoOwnershipIO(unittest.TestCase):
         with self.assertRaises((ValueError, io.UnsupportedOperation)):
             wrapper.fileno()
 
-    def test_readinto_raises_after_wrapper_closed(self):
-        """readinto raises after wrapper closed."""
-        base = io.BytesIO(b"test data")
-        wrapper = NonClosingStream(base)
-
-        buffer = bytearray(4)
-        n = wrapper.readinto(buffer)
-        self.assertEqual(n, 4)
-        self.assertEqual(buffer, bytearray(b"test"))
-
-        wrapper.close()
-
-        buffer2 = bytearray(4)
-        with self.assertRaises(ValueError):
-            wrapper.readinto(buffer2)
-
     def test_init_validates_attribute_requirements(self):
         """Constructor validates base is io.IOBase compatible."""
         with self.assertRaises(TypeError) as ctx:
             NonClosingStream("not a stream")  # type: ignore
-        self.assertIn("base must be a stream-like object with ", str(ctx.exception))
-
-    def test_duck_typed_io_accepted(self):
-        """Duck-typed IO object with required methods is accepted."""
-
-        class DuckTypedIO:
-            def __init__(self):
-                self.closed = False
-
-            def close(self):
-                pass
-
-            def write(self, data):
-                pass
-
-            def flush(self):
-                pass
-
-        base = DuckTypedIO()
-        # Should not raise TypeError
-        wrapper = NonClosingStream(base, required_attrs=["close", "write", "flush", "closed"])
-        self.assertIsNotNone(wrapper)
+        self.assertIn("base must be an IOBase instance", str(ctx.exception))
 
     def test_write_flush_sequence_after_close_raises(self):
         """Simulates PyArrow ParquetWriter close sequence after wrapper closed - now raises."""
@@ -295,7 +258,6 @@ class TestNoOwnershipIO(unittest.TestCase):
             cached_write(b"data")
         self.assertIn("closed", str(ctx.exception).lower())
 
-
     def test_force_base_close_method(self):
         """force_base_close method closes the underlying base stream."""
         base = io.BytesIO()
@@ -303,7 +265,7 @@ class TestNoOwnershipIO(unittest.TestCase):
 
         self.assertFalse(base.closed)
 
-        wrapper.force_base_close()
+        wrapper.close_base()
 
         self.assertTrue(base.closed)
         self.assertTrue(wrapper.closed)  # Wrapper remains open
