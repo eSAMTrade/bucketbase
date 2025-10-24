@@ -5,7 +5,7 @@ import unittest
 from bucketbase.utils import NonClosingStream
 
 
-class TestNoOwnershipIO(unittest.TestCase):
+class TestNonClosingStream(unittest.TestCase):
     """Test NoOwnershipIO wrapper functionality."""
 
     def test_wrapper_close_does_not_close_base_stream(self):
