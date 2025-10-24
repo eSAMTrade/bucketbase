@@ -16,6 +16,8 @@ from typing_extensions import Self
 from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
 
+from bucketbase.utils import NonClosingStream
+
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
 S3_NAME_CHARS_NO_SEP = r"\w!\-\.')("
@@ -44,7 +46,7 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
         self._stream.close()
 
 
-class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
+class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
         self._consumer_stream = QueueBinaryReadable()
@@ -52,11 +54,12 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
         self._exc: Optional[BaseException] = None
         self._timeout_sec = timeout_sec
         self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._wrapped_stream = NonClosingStream(self._queue_feeder)
         self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
 
-    def __enter__(self) -> QueueBinaryWritable:
+    def __enter__(self) -> NonClosingStream:
         self._thread.start()
-        return self._queue_feeder
+        return self._wrapped_stream
 
     @staticmethod
     def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
@@ -82,7 +85,7 @@ class AsyncObjectWriter(AbstractContextManager[QueueBinaryWritable]):
                 exceptions_chain.append(e)
         else:
             try:
-                self._queue_feeder.close()
+                self._wrapped_stream.close_base()
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish

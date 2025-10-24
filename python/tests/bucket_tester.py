@@ -88,10 +88,10 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         # Next is a unique suffix to be used in the names of dirs and files, so they will be unique
         self.us = f"{iTSms.now() % 100_000_000:08d}"
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         self.storage.remove_prefix(f"dir{self.us}")
 
-    def test_put_and_get_object(self):
+    def test_put_and_get_object(self) -> None:
         unique_dir = f"dir{self.us}"
         # binary content
         path = PurePosixPath(f"{unique_dir}/file1.bin")
@@ -127,9 +127,9 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
     def validated_put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         assert isinstance(stream, io.IOBase), f"stream must be a BinaryIO, but got {type(stream)}"
-        return self.storage.put_object_stream(name, stream)
+        return self.storage.put_object_stream(name, stream)  # type: ignore[arg-type]
 
-    def test_put_and_get_object_stream(self):
+    def test_put_and_get_object_stream(self) -> None:
         unique_dir = f"dir{self.us}"
         # binary content
         path = PurePosixPath(f"{unique_dir}/file1.bin")
@@ -151,7 +151,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
                 result = file.read()
         self.test_case.assertEqual(result, "Test\ncontent")
 
-    def test_streaming_failure_atomicity(self):
+    def test_streaming_failure_atomicity(self) -> None:
         """
         Test that failed streaming operations don't leave partial objects in the bucket.
         This ensures atomicity - either the object is completely written or it doesn't exist.
@@ -168,7 +168,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         # Attempt to put object with failing stream - should raise exception
         with self.test_case.assertRaises(MockException):
-            self.storage.put_object_stream(path1, failing_stream)
+            self.storage.put_object_stream(path1, failing_stream)  # type: ignore[arg-type]
 
         # Object should NOT exist after failed operation
         self.test_case.assertFalse(self.storage.exists(path1), "Object should not exist after failed put_object_stream")
@@ -199,7 +199,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertFalse(self.storage.exists(path3))
 
         # Attempt to fput non-existent file - should raise exception
-        with self.test_case.assertRaises((FileNotFoundError, IOError)):
+        with self.test_case.assertRaises((FileNotFoundError, IOError)):  # type: ignore[misc]
             self.storage.fput_object(path3, non_existent_file)
 
         # Object should NOT exist after failed operation
@@ -215,7 +215,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         # Attempt to put object with stream that fails mid-read
         with self.test_case.assertRaises(MockException):
-            self.storage.put_object_stream(path4, partial_failing_stream)
+            self.storage.put_object_stream(path4, partial_failing_stream)  # type: ignore[arg-type]
 
         # Object should NOT exist after failed operation
         self.test_case.assertFalse(self.storage.exists(path4), "Object should not exist after failed partial stream read")
@@ -248,7 +248,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertFalse(self.storage.exists(path6))
 
         # Attempt to fput deleted file - should raise exception
-        with self.test_case.assertRaises((FileNotFoundError, IOError)):
+        with self.test_case.assertRaises((FileNotFoundError, IOError)):  # type: ignore[misc]
             self.storage.fput_object(path6, temp_file_path)
 
         # Object should NOT exist after failed operation
@@ -258,7 +258,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         path = f"{unique_dir}/inexistent.txt"
         self.test_case.assertRaises(FileNotFoundError, self.storage.get_object_stream, path)
 
-    def test_list_objects(self):
+    def test_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"
         self.storage.put_object(PurePosixPath(f"{unique_dir}/file1.txt"), b"Content 1")
         self.storage.put_object(PurePosixPath(f"{unique_dir}/dir2/file2.txt"), b"Content 2")
@@ -290,13 +290,13 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         for prefix in self.INVALID_PREFIXES:
             self.test_case.assertRaises(ValueError, self.storage.list_objects, prefix)
 
-    def test_list_objects_with_over1000keys(self):
+    def test_list_objects_with_over1000keys(self) -> None:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
 
         objects = self.storage.list_objects(path_with2025_keys)
         self.test_case.assertEqual(2025, objects.size())
 
-    def test_shallow_list_objects(self):
+    def test_shallow_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"
         self.storage.put_object(PurePosixPath(f"{unique_dir}/file1.txt"), b"Content 1")
         self.storage.put_object(PurePosixPath(f"{unique_dir}/dir2/file2.txt"), b"Content 2")
@@ -330,13 +330,13 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         for prefix in self.INVALID_PREFIXES:
             self.test_case.assertRaises(ValueError, self.storage.shallow_list_objects, prefix)
 
-    def test_shallow_list_objects_with_over1000keys(self):
+    def test_shallow_list_objects_with_over1000keys(self) -> None:
         path_with2025_keys = self._ensure_dir_with_2025_keys()
         shallow_listing = self.storage.shallow_list_objects(path_with2025_keys)
         self.test_case.assertEqual(2025, shallow_listing.objects.size())
         self.test_case.assertEqual(0, shallow_listing.prefixes.size())
 
-    def test_exists(self):
+    def test_exists(self) -> None:
         unique_dir = f"dir{self.us}"
         path = PurePosixPath(f"{unique_dir}/file.txt")
         self.storage.put_object(path, b"Content")
@@ -344,7 +344,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertFalse(self.storage.exists(f"{unique_dir}"))
         self.test_case.assertRaises(ValueError, self.storage.exists, f"{unique_dir}/")
 
-    def test_remove_objects(self):
+    def test_remove_objects(self) -> None:
         # Setup the test
         unique_dir = f"dir{self.us}"
         path1 = PurePosixPath(f"{unique_dir}/file1.txt")
@@ -381,7 +381,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             stream_obj.fastmap(upload_file, poolSize=100).to_list()
         return self.PATH_WITH_2025_KEYS
 
-    def test_get_size(self):
+    def test_get_size(self) -> None:
         # Setup the test
         unique_dir = f"dir{self.us}"
         path1 = PurePosixPath(f"{unique_dir}/file1.txt")
@@ -399,7 +399,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.storage.put_object(path1, content1)
         self.test_case.assertEqual(len(content1), self.storage.get_size(path1))
 
-    def test_open_write(self):
+    def test_open_write(self) -> None:
         """Test the open_write method functionality."""
         unique_dir = f"dir{self.us}"
 
@@ -410,8 +410,8 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         test_object1 = self.storage.open_write(path2, timeout_sec=3)
         with test_object1 as sink:
-            with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:
-                with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:
+            with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=1) as gzbin:  # type: ignore[arg-type]
+                with io.TextIOWrapper(gzbin, encoding="utf-8", newline="") as gztext:  # type: ignore[arg-type]
                     w = csv.writer(gztext)
                     w.writerow(header)
                     for row in rows:
@@ -460,7 +460,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             test_object3._thread.join(timeout=1.0)  # pylint: disable=W0212
             self.test_case.assertFalse(test_object3._thread.is_alive())  # pylint: disable=W0212
 
-    def test_open_write_timeout(self):
+    def test_open_write_timeout(self) -> None:
         # test timeout functionality in open_write:we write immediately, but the consumer doesn't consume in time;
         # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
         # test timeout functionality in open_write: we write immediately, but the consumer doesn't consume in time.
@@ -491,7 +491,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
             self.storage.put_object_stream = slow_put_object_stream
 
-            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=0.5)
+            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=0.5)  # type: ignore[assignment]
             with self.test_case.assertRaises(TimeoutError):
                 with test_object as sink:
                     sink.write(test_content_timeout)
@@ -507,11 +507,11 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
                     print(f"Waiting for thread {thread.name} to complete...")
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
-                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")  # type: ignore[misc]
             self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
             self.test_case.assertListEqual([TimeoutError], [e.__class__ for e in successes], f"Expected [TimeoutError], but got {successes}")
 
-    def test_open_write_consumer_throws(self):
+    def test_open_write_consumer_throws(self) -> None:
         # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
         unique_dir = f"dir{self.us}"
         path_timeout = PurePosixPath(f"{unique_dir}/open_write_consumer_throws.txt")
@@ -532,7 +532,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
             self.storage.put_object_stream = throwing_put_object_stream
 
-            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=3)
+            test_object: AsyncObjectWriter = self.storage.open_write(path_timeout, timeout_sec=3)  # type: ignore[assignment]
             with self.test_case.assertRaises(MockException):
                 with test_object as sink:
                     sink.write(test_content_timeout)
@@ -547,10 +547,10 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
                     print(f"Waiting for thread {thread.name} to complete...")
                     thread.join(timeout=5.0)  # Wait up to 5 seconds
                     if thread.is_alive():
-                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")
+                        raise TimeoutError(f"Thread {thread.name} did not complete within timeout")  # type: ignore[misc]
             self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
 
-    def test_open_write_feeder_throws(self):
+    def test_open_write_feeder_throws(self) -> None:
         unique_dir = f"dir{self.us}"
         path_timeout = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
         test_content_timeout = b"Timeout test content"
@@ -577,10 +577,10 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 expected_exc.put(e)
 
-        test_object: AsyncObjectWriter = None
+        test_object: AsyncObjectWriter = None  # type: ignore[assignment]
         self.storage.put_object_stream = throwing_put_object_stream
         try:
-            test_object = self.storage.open_write(path_timeout, timeout_sec=1)
+            test_object = self.storage.open_write(path_timeout, timeout_sec=1)  # type: ignore[assignment]
             try:
                 with test_object as sink:
                     sink.write(test_content_timeout)
@@ -601,7 +601,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
                 self.test_case.assertFalse(test_object._thread.is_alive())  # pylint: disable=W0212
             self.test_case.assertEqual("test exception", str(expected_exc.get_nowait()))
 
-    def test_open_write_with_parquet(self):  # pylint: disable=too-many-locals
+    def test_open_write_with_parquet(self) -> None:  # pylint: disable=too-many-locals
         """Test the open_write method with pyarrow parquet files using multiple batches."""
         unique_dir = f"dir{self.us}"
         parquet_path = PurePosixPath(f"{unique_dir}/open_write_test_data.parquet")
@@ -629,13 +629,12 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             batches.append(batch)
 
         # Write parquet file using open_write
-        tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=3)
+        tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=3)  # type: ignore[assignment]
         with tested_object as sink:
-            arrow_sink = pa.output_stream(sink)
-            with pq.ParquetWriter(arrow_sink, schema) as writer:
-                for batch in batches:
-                    writer.write_batch(batch)
-            arrow_sink.close()
+            with pa.output_stream(sink) as arrow_sink:
+                with pq.ParquetWriter(arrow_sink, schema) as writer:
+                    for batch in batches:
+                        writer.write_batch(batch)
 
         # Verify the file was created and has correct size
         self.test_case.assertTrue(self.storage.exists(parquet_path))
@@ -686,7 +685,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         if isinstance(tested_object, AsyncObjectWriter):
             self.test_case.assertFalse(tested_object._thread.is_alive())  # pylint: disable=W0212
 
-    def test_put_object_stream_exception_cleanup(self):
+    def test_put_object_stream_exception_cleanup(self) -> None:
         """
         Test that when put_object_stream fails (stream raises exception during read),
         the file is NOT visible in list_objects.
@@ -705,7 +704,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         # Attempt to put object with failing stream
         with self.test_case.assertRaises(MockException):
-            self.storage.put_object_stream(test_path, failing_stream)
+            self.storage.put_object_stream(test_path, failing_stream)  # type: ignore[arg-type]
 
         # The critical assertion: object should NOT exist after failed stream
         self.test_case.assertFalse(self.storage.exists(test_path), "Object should not exist after put_object_stream failure")
@@ -714,7 +713,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         objects = self.storage.list_objects(unique_dir)
         self.test_case.assertFalse(objects, "Object should not appear in list_objects after failed write")
 
-    def test_open_write_partial_write_exception_cleanup(self):
+    def test_open_write_partial_write_exception_cleanup(self) -> None:
         """
         Test that when an exception occurs after writing some data (but not closing properly),
         the file is NOT visible in list_objects.
@@ -750,7 +749,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         objects = self.storage.list_objects(unique_dir)
         self.test_case.assertFalse(objects, "Object should not appear in list_objects after failed write")
 
-    def test_open_write_without_proper_close(self):
+    def test_open_write_without_proper_close(self) -> None:
         """
         Test that simulates not properly closing the file during open_write.
         This is closer to the real-world scenario where a file handle is not closed properly.
@@ -784,7 +783,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertFalse(objects, f"list_objects should return empty list, got {objects}")
         writer_manager.__exit__(None, None, None)
 
-    def test_open_write_sync_exception_cleanup(self):
+    def test_open_write_sync_exception_cleanup(self) -> None:
         """
         Test that when an exception is raised during open_write_sync, the file is NOT visible in list_objects.
         This tests the synchronous version of open_write (if available).
@@ -803,7 +802,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         # Attempt to write with an exception raised during writing
         with self.test_case.assertRaises(MockException):
-            with self.storage.open_write_sync(test_path) as writer:
+            with self.storage.open_write_sync(test_path) as writer:  # type: ignore[attr-defined]
                 writer.write(test_content)
                 # Raise an exception before the context manager exits normally
                 raise MockException("Simulated write failure in sync mode")
@@ -815,7 +814,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         objects = self.storage.list_objects(unique_dir)
         self.test_case.assertFalse(objects, f"list_objects should return empty list, got {objects}")
 
-    def test_regression_parquet_by_AMX(self):
+    def test_regression_parquet_by_AMX(self) -> None:
         parquet_schema = pa.schema([("a", pa.int64())])
         unique_dir = f"dir{self.us}"
         test_path = PurePosixPath(f"{unique_dir}/test_regression.parquet")
@@ -827,7 +826,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         arrow_sink: pa.NativeFile = pa.output_stream(writer)
         parquet_writer = pq.ParquetWriter(writer, parquet_schema)
 
-        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)
+        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)  # type: ignore[misc]
         parquet_writer.write_batch(batch)
 
         existing = list(str(x) for x in self.storage.list_objects(test_path))
@@ -837,6 +836,73 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         existing = list(str(x) for x in self.storage.list_objects(test_path))
         self.test_case.assertEqual(0, len(existing), f"exists (after arrow close): {existing}")
-        writer_ctx.__exit__(RuntimeError, RuntimeError("test"), None)
+        with self.test_case.assertRaises(RuntimeError):
+            writer_ctx.__exit__(RuntimeError, RuntimeError("test"), None)
         existing = list(str(x) for x in self.storage.list_objects(test_path))
-        self.test_case.assertEqual(0, len(existing), f"exists (and must not, because of __exit__ with errir): {existing}")
+        self.test_case.assertEqual(0, len(existing), f"exists (and must not, because of __exit__ with error): {existing}")
+
+    def test_regression_exception_thrown_in_parquet_writer_context_doesnt_save_object(self) -> None:
+        """credits to AMX (amaximciuc@esamtrade.com)"""
+        parquet_schema = pa.schema([("a", pa.int64())])
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/test_regression.parquet")
+
+        self.storage.remove_objects([test_path])
+        with self.test_case.assertRaises(RuntimeError):
+            with self.storage.open_write(test_path, timeout_sec=5.0) as writer:
+                with pa.output_stream(writer) as arrow_sink:
+                    arrow_sink: pa.NativeFile
+                    with pq.ParquetWriter(arrow_sink, parquet_schema) as parquet_writer:
+                        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)  # type: ignore[misc]
+                        parquet_writer.write_batch(batch)
+
+                        existing = self.storage.list_objects(test_path)
+                        self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (and must not; no flush yet): {existing}")
+                        raise RuntimeError("test")
+
+        existing = self.storage.list_objects(test_path)
+        self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (after arrow close): {existing}")
+
+    def test_regression_exception_thrown_in_arrow_sink_context_doesnt_save_object(self) -> None:
+        """credits to AMX (amaximciuc@esamtrade.com)"""
+        parquet_schema = pa.schema([("a", pa.int64())])
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/test_regression.parquet")
+
+        self.storage.remove_objects([test_path])
+        with self.test_case.assertRaises(RuntimeError):
+            with self.storage.open_write(test_path, timeout_sec=5.0) as writer:
+                with pa.output_stream(writer) as arrow_sink:
+                    arrow_sink: pa.NativeFile
+                    with pq.ParquetWriter(arrow_sink, parquet_schema) as parquet_writer:
+                        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)  # type: ignore[misc]
+                        parquet_writer.write_batch(batch)
+
+                    existing = self.storage.list_objects(test_path)
+                    self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (and must not; no flush yet): {existing}")
+                    raise RuntimeError("test")
+
+        existing = self.storage.list_objects(test_path)
+        self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (after arrow close): {existing}")
+
+    def test_regression_exception_thrown_in_open_write_context_doesnt_save_object(self) -> None:
+        """credits to AMX (amaximciuc@esamtrade.com)"""
+        parquet_schema = pa.schema([("a", pa.int64())])
+        unique_dir = f"dir{self.us}"
+        test_path = PurePosixPath(f"{unique_dir}/test_regression.parquet")
+
+        self.storage.remove_objects([test_path])
+        with self.test_case.assertRaises(RuntimeError):
+            with self.storage.open_write(test_path, timeout_sec=5.0) as writer:
+                with pa.output_stream(writer) as arrow_sink:
+                    arrow_sink: pa.NativeFile
+                    with pq.ParquetWriter(arrow_sink, parquet_schema) as parquet_writer:
+                        batch = pa.RecordBatch.from_arrays([pa.array([1, 2, 3])], schema=parquet_schema)  # type: ignore[misc]
+                        parquet_writer.write_batch(batch)
+
+                existing = self.storage.list_objects(test_path)
+                self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (and must not; no flush yet): {existing}")
+                raise RuntimeError("test")
+
+        existing = self.storage.list_objects(test_path)
+        self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (after arrow close): {existing}")

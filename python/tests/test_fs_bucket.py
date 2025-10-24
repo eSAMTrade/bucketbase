@@ -13,7 +13,7 @@ from tests.chunkedstream import ChunkedCallbackStream
 
 
 class TestFSBucket(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.temp_dir_path = Path(self.temp_dir.name)
         self.storage = FSBucket(self.temp_dir_path)
@@ -22,34 +22,34 @@ class TestFSBucket(TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_put_and_get_object(self):
+    def test_put_and_get_object(self) -> None:
         self.tester.test_put_and_get_object()
 
-    def test_put_and_get_object_stream(self):
+    def test_put_and_get_object_stream(self) -> None:
         self.tester.test_put_and_get_object_stream()
 
         # check no remaining files in temp dir
         self.assertEqual(0, len(list((self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME).iterdir())))
 
-    def test_list_objects(self):
+    def test_list_objects(self) -> None:
         self.tester.test_list_objects()
 
-    def test_shallow_list_objects(self):
+    def test_shallow_list_objects(self) -> None:
         self.tester.test_shallow_list_objects()
 
-    def test_exists(self):
+    def test_exists(self) -> None:
         self.tester.test_exists()
 
-    def test_remove_objects(self):
+    def test_remove_objects(self) -> None:
         self.tester.test_remove_objects()
 
-    def test_get_size(self):
+    def test_get_size(self) -> None:
         self.tester.test_get_size()
 
-    def test_open_write(self):
+    def test_open_write(self) -> None:
         self.tester.test_open_write()
 
-    def test_open_write_consumer_throws(self):
+    def test_open_write_consumer_throws(self) -> None:
         # The consumer is the bucketbase.ibucket.AsyncObjectWriter._write_to_bucket, which in turn calls _bucket.put_object_stream on its own thread
         unique_dir = f"dir{iTSms.now() % 100_000_000:08d}"
         path_timeout = PurePosixPath(f"{unique_dir}/open_write_consumer_throws.txt")
@@ -71,7 +71,7 @@ class TestFSBucket(TestCase):
             # Restore the original method to avoid side effects for other tests
             self.storage._try_rename_tmp_file = orig_try_rename_tmp_file
 
-    def test_open_write_feeder_throws(self):
+    def test_open_write_feeder_throws(self) -> None:
         unique_dir = f"dir{iTSms.now() % 100_000_000:08d}"
         path_in_test = PurePosixPath(f"{unique_dir}/open_write_feeder_throws.txt")
         test_content_timeout = b"Timeout test content"
@@ -85,22 +85,22 @@ class TestFSBucket(TestCase):
             self.assertEqual("test exception", str(e))
         self.assertFalse(self.storage.exists(path_in_test))
 
-    def test_open_write_with_parquet(self):
+    def test_open_write_with_parquet(self) -> None:
         self.tester.test_open_write_with_parquet()
 
-    def test_streaming_failure_atomicity(self):
+    def test_streaming_failure_atomicity(self) -> None:
         self.tester.test_streaming_failure_atomicity()
 
-    def test_put_object_stream_exception_cleanup(self):
+    def test_put_object_stream_exception_cleanup(self) -> None:
         self.tester.test_put_object_stream_exception_cleanup()
 
-    def test_open_write_partial_write_exception_cleanup(self):
+    def test_open_write_partial_write_exception_cleanup(self) -> None:
         self.tester.test_open_write_partial_write_exception_cleanup()
 
-    def test_open_write_without_proper_close(self):
+    def test_open_write_without_proper_close(self) -> None:
         self.tester.test_open_write_without_proper_close()
 
-    def test_broken_stream_upload(self):
+    def test_broken_stream_upload(self) -> None:
         """on broken stream upload, the file should not be "uploaded" i.e. not shown in list and shallow_list"""
         test_content = b"This is some test content that should not be completely uploaded"
         test_object_name = "broken_upload_test.txt"
@@ -114,7 +114,7 @@ class TestFSBucket(TestCase):
         broken_stream = ChunkedCallbackStream(test_content, callback=break_10th_chunk, chunk_size=10)
 
         with self.assertRaises(IOError):
-            # noinspection PyTypeChecker
+            # type: ignore[arg-type]
             self.storage.put_object_stream(test_object_name, broken_stream)
 
         self.assertFalse(self.storage.exists(test_object_name))
@@ -124,7 +124,7 @@ class TestFSBucket(TestCase):
         self.assertEqual(0, len(list(slist.prefixes)))
         self.assertEqual(0, len(list(slist.objects)))
 
-    def test_multiple_fsbuckets_same_local_put_get(self):
+    def test_multiple_fsbuckets_same_local_put_get(self) -> None:
         # 2 instances of FSBucket pointing to the same directory should work normally
         temp_dir = Path(self.temp_dir.name)
         bucket1 = FSBucket(temp_dir)
@@ -142,7 +142,7 @@ class TestFSBucket(TestCase):
         self.assertFalse(bucket2.exists(test_object_name))
         self.assertEqual(0, len(list(bucket2.list_objects(""))))
 
-    def test_listing_our_dir(self):
+    def test_listing_our_dir(self) -> None:
         obj_name = PurePosixPath("dir1/file.txt")
         self.storage.put_object_stream(obj_name, BytesIO(b"Test content"))
         tmp_file = self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME / f"{obj_name.as_posix().replace('/', '#')}.tmp"
@@ -166,7 +166,7 @@ class TestFSBucket(TestCase):
         self.assertListEqual([obj_name], self.storage.list_objects(""))
         self.assertListEqual([obj_name], self.storage.list_objects("d"))
 
-    def test_shallow_listing_our_dir(self):
+    def test_shallow_listing_our_dir(self) -> None:
         obj_name = PurePosixPath("dir1/file.txt")
         self.storage.put_object_stream(obj_name, BytesIO(b"Test content"))
         tmp_file = self.temp_dir_path / FSBucket.BUCKETBASE_TMP_DIR_NAME / f"{obj_name.as_posix().replace('/', '#')}.tmp"
@@ -192,7 +192,7 @@ class TestFSBucket(TestCase):
         self.assertListEqual([], s_listing.objects)
         self.assertListEqual(["dir1/"], s_listing.prefixes)
 
-    def test_get_size_during_writing(self):
+    def test_get_size_during_writing(self) -> None:
         """Test that get_size raises FileNotFoundError while writing an object one byte at a time until complete."""
         test_file = "size_during_write_test.txt"
         content = b"Testing byte-by-byte writing with size checks"
@@ -212,8 +212,8 @@ class TestFSBucket(TestCase):
                 self.storage.get_size(test_file)
 
         stream = ChunkedCallbackStream(content, callback=check_size_callback, chunk_size=1, final_callback=final_check)
-
-        self.storage.put_object_stream(test_file, stream)
+        # type: ignore[arg-type]
+        self.storage.put_object_stream(test_file, stream)  # type: ignore[arg-type]
 
         self.assertTrue(self.storage.exists(test_file))
         final_size = self.storage.get_size(test_file)
@@ -222,7 +222,7 @@ class TestFSBucket(TestCase):
         self.assertTrue(size_checks > 0, "No size checks were performed during writing")
         self.assertTrue(not_found_checks > 0, "No FileNotFoundError exceptions were caught")
 
-    def test_concurrent_put_streams(self):
+    def test_concurrent_put_streams(self) -> None:
         test_cases = [
             {"name": "same_file", "filename": "test/dir/for/concurrent_test.txt", "wanted_num_files": 1, "num_threads": 9},
             {"name": "distinct_files", "filename": "", "wanted_num_files": 9, "num_threads": 9},
@@ -236,7 +236,7 @@ class TestFSBucket(TestCase):
                 )
             self.tearDown()
 
-    def _run_concurrent_put_stream(self, fname=None, wanted_num_files=1, num_threads=6):
+    def _run_concurrent_put_stream(self, fname=None, wanted_num_files=1, num_threads=6) -> None:
         storage_workdir = self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME
 
         barrier_started = Barrier(num_threads + 1)
@@ -254,7 +254,8 @@ class TestFSBucket(TestCase):
                 filename = f"test/dir/for/concurrent_test_{ident}.txt"
             barrier_started.wait()
             content_stream = ChunkedCallbackStream(content, chunk_size=1, final_callback=_finalizer)
-            storage.put_object_stream(filename, content_stream)
+            # type: ignore[arg-type]
+            storage.put_object_stream(filename, content_stream)  # type: ignore[arg-type]
 
         threads = []
         for i in range(num_threads):
@@ -287,5 +288,11 @@ class TestFSBucket(TestCase):
             f"Expected {wanted_num_files} files in at list_objects(''), but found {len(list(self.storage.list_objects('')))}",
         )
 
-    def test_regression_parquet_by_AMX(self):
-        self.tester.test_regression_parquet_by_AMX()
+    def test_regression_parquet_exception_thrown_in_prq_writer_by_AMX(self) -> None:
+        self.tester.test_regression_exception_thrown_in_parquet_writer_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_arrow_sink_by_AMX(self) -> None:
+        self.tester.test_regression_exception_thrown_in_arrow_sink_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_open_write_context_by_AMX(self) -> None:
+        self.tester.test_regression_exception_thrown_in_open_write_context_doesnt_save_object()
