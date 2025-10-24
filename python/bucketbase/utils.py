@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from io import IOBase
-from typing import final, override
+
+try:
+    from typing import final, override
+except ImportError:
+    from typing_extensions import final, override
 
 
 @final
@@ -27,9 +31,11 @@ class NonClosingStream(IOBase):
         self._base = base
         self._closed: bool = False
 
+    @override
     def close(self) -> None:
         self._closed = True
 
+    @override
     @property
     def closed(self) -> bool:
         """Return True if the object is closed or its base is closed."""
@@ -39,27 +45,31 @@ class NonClosingStream(IOBase):
         if self.closed:
             raise ValueError("I/O operation on closed file")
 
+    @override
     def __iter__(self):
         self._raise_if_stream_is_closed()
         return self
 
+    @override
     def __next__(self):
         self._raise_if_stream_is_closed()
         return next(self._base)
 
+    @override
     def __enter__(self):
         self._raise_if_stream_is_closed()
         return self
 
+    @override
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
     def close_base(self) -> None:
         self._base.close()
 
-    def write(self, b: bytes) -> int:
+    def write(self, *args, **kwargs) -> int:
         self._raise_if_stream_is_closed()
-        return self._base.write(b)
+        return self._base.write(*args, **kwargs)
 
     @override
     def flush(self) -> None:
@@ -124,4 +134,3 @@ class NonClosingStream(IOBase):
     def writelines(self, lines) -> None:
         self._raise_if_stream_is_closed()
         return self._base.writelines(lines)
- 

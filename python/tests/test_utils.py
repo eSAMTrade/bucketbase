@@ -6,8 +6,6 @@ from bucketbase.utils import NonClosingStream
 
 
 class TestNonClosingStream(unittest.TestCase):
-    """Test NoOwnershipIO wrapper functionality."""
-
     def test_wrapper_close_does_not_close_base_stream(self):
         """Wrapper close marks only wrapper as closed, base remains open."""
         base = io.BytesIO(b"test data")
@@ -98,9 +96,10 @@ class TestNonClosingStream(unittest.TestCase):
         """Using wrapper as context manager closes wrapper but not base."""
         base = tempfile.NamedTemporaryFile(delete=False)
         try:
-            with NonClosingStream(base) as wrapper:
-                self.assertFalse(wrapper.closed)
-                wrapper.write(b"data")
+            with open(base.name, "wb") as base_io:
+                with NonClosingStream(base_io) as wrapper:
+                    self.assertFalse(wrapper.closed)
+                    wrapper.write(b"data")
 
             # After context exit
             self.assertTrue(wrapper.closed)

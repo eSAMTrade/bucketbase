@@ -60,5 +60,11 @@ class TestMemoryBucket(TestCase):
     def test_open_write_sync_exception_cleanup(self):
         self.tester.test_open_write_sync_exception_cleanup()
 
-    def test_regression_parquet_by_AMX(self):
-        self.tester.test_regression_parquet_by_AMX()
+    def test_regression_parquet_exception_thrown_in_prq_writer_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_parquet_writer_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_arrow_sink_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_arrow_sink_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_open_write_context_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_open_write_context_doesnt_save_object()
