@@ -130,7 +130,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 try:
                     self._q.put(bytes(data), timeout=timeout_sec)
                 except queue.Full:
-                    raise TimeoutError(f"Timeout after {timeout_sec} seconds waiting to write data")
+                    raise TimeoutError(f"Timeout after {timeout_sec} seconds waiting to write data")  # pylint: disable=raise-missing-from
 
     def send_eof(self, timeout_sec: Optional[float] = None) -> None:
         """Called from feeder to signal EOF"""
@@ -166,6 +166,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         try:
             self._q.put_nowait(_ErrorWrapper(exc))
         except queue.Full:
+            # pylint: disable=raise-missing-from
             raise RuntimeError(f"Failed to propagate exception to reader. Someone unexpected thread is putting data in the queue: {self._q.qsize()}")
 
     def on_consumer_fail(self, exc: BaseException):
@@ -226,7 +227,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
         super().close()
 
     @override
-    def read(self, size: int = -1) -> bytes:
+    def read(self, size: int = -1) -> bytes:  # pylint: disable=too-many-branches
         with self._read_lock:
             if self._closed_flag:
                 raise ValueError("Stream is closed")
@@ -293,6 +294,11 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 b[:n] = chunk
             return n
 
+    def __del__(self):
+        """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
+        See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
+        """
+
 
 class QueueBinaryWritable(io.RawIOBase, BinaryIO):
     CHUNK_SIZE = 1024 * 1024  # 1 MiB per queue item
@@ -329,8 +335,6 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
         super().close()
 
     def __del__(self):
-        try:
-            if not self._closed:
-                self.close()
-        except BaseException:
-            pass
+        """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
+        See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
+        """

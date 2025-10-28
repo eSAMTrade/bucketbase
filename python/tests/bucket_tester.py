@@ -1,4 +1,5 @@
 import csv
+import gc
 import gzip
 import io
 import tempfile
@@ -906,3 +907,26 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         existing = self.storage.list_objects(test_path)
         self.test_case.assertFalse(self.storage.list_objects(test_path), f"objects exists (after arrow close): {existing}")
+
+    def test_regression_infinite_cycle_on_unentered_open_write_context(self):
+        """
+        Regression test for hang when AsyncObjectWriter context is not entered.
+
+        The BUG was: When AsyncObjectWriter is created but __enter__() is never called, garbage collection would trigger IOBase.__del__() which calls close(),
+            which would wait indefinitely for a thread that was never started.
+
+        This test verifies that creating and destroying AsyncObjectWriter without entering the context does not hang the process.
+        """
+
+        def run_gc_test():
+            """Inner function that performs the GC test"""
+            __async_writer_which_doesnt_enter_context = self.storage.open_write("test-async-writer-block")
+            del __async_writer_which_doesnt_enter_context
+            # Force garbage collection - this is expected to HANG if the bug is present
+            gc.collect()
+
+        test_thread = threading.Thread(target=run_gc_test, daemon=True)
+        test_thread.start()
+        test_thread.join(timeout=1.0)
+
+        self.test_case.assertFalse(test_thread.is_alive(), "GC test HUNG - thread did not complete within 1s.")

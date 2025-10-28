@@ -15,7 +15,6 @@ from typing_extensions import Self
 
 from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
 from bucketbase.errors import DeleteError
-
 from bucketbase.utils import NonClosingStream
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
@@ -49,16 +48,20 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
 class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
     def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
         self._name = name
-        self._consumer_stream = QueueBinaryReadable()
         self._bucket = bucket
-        self._exc: Optional[BaseException] = None
         self._timeout_sec = timeout_sec
-        self._queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
-        self._wrapped_stream = NonClosingStream(self._queue_feeder)
-        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
+        self._exc: Optional[BaseException] = None
+        self._thread: Optional[Thread] = None
+        self._wrapped_stream: Optional[NonClosingStream] = None
+        self._consumer_stream: Optional[QueueBinaryReadable] = None
 
     def __enter__(self) -> NonClosingStream:
+        self._consumer_stream = QueueBinaryReadable()
+        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
+        queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._wrapped_stream = NonClosingStream(queue_feeder)
         self._thread.start()
+
         return self._wrapped_stream
 
     @staticmethod

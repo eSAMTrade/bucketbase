@@ -117,6 +117,11 @@ The code in this project is licensed under MIT license.
 
 ### Changelog
 
+##### 1.4.8
+
+- Fixed GC related BUG in AsyncObjectWriter reproducible when AsyncObjectWriter context is not entered.
+- Credits to [Maxim Morari](https://github.com/MorariMaxim) for the BUG report.
+
 ##### 1.4.7
 
 - Added important feature to AsyncObjectWriter to properly work with the file-objects like ArrowSink that is not aware of the finalization semantics.

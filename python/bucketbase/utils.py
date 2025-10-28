@@ -35,6 +35,11 @@ class NonClosingStream(IOBase):
     def close(self) -> None:
         self._closed = True
 
+    def __del__(self):
+        """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
+        See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
+        """
+
     @override
     @property
     def closed(self) -> bool:

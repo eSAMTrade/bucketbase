@@ -296,3 +296,6 @@ class TestFSBucket(TestCase):
 
     def test_regression_exception_thrown_in_open_write_context_by_AMX(self) -> None:
         self.tester.test_regression_exception_thrown_in_open_write_context_doesnt_save_object()
+
+    def test_regression_infinite_cycle_on_unentered_open_write_context(self):
+        self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()
