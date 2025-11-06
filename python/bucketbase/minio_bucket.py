@@ -1,7 +1,6 @@
 import io
 import logging
 import os
-import traceback
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable, Union
 
@@ -11,10 +10,10 @@ import urllib3
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
-from minio.helpers import MIN_PART_SIZE, MAX_PART_SIZE
+from minio.helpers import MAX_PART_SIZE, MIN_PART_SIZE
 from multiminio import MultiMinio
 from pyxtension import validate
-from streamerate import slist as slist
+from streamerate import slist
 from streamerate import stream as sstream
 from urllib3 import BaseHTTPResponse
 
@@ -23,19 +22,20 @@ from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
 
 class MinioObjectStream(ObjectStream):
     def __init__(self, response: BaseHTTPResponse, object_name: PurePosixPath) -> None:
-        super().__init__(response, object_name)
+        # Wrap the BaseHTTPResponse to make it compatible with BinaryIO
+        super().__init__(response, object_name)  # type: ignore[arg-type]
         self._response = response
         self._size = int(response.headers.get("content-length", -1))
 
-    def __enter__(self) -> ObjectStream:
-        return self._response
+    def __enter__(self) -> BinaryIO:
+        return self._response  # type: ignore[return-value]
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
         self._response.close()
         self._response.release_conn()
 
 
-def build_minio_client(
+def build_minio_client(  # pylint: disable=too-many-positional-arguments
     endpoints: str, access_key: str, secret_key: str, secure: bool = True, region: str | None = "custom", conn_pool_size: int = 128, timeout: int = 5
 ) -> Minio:
     """
@@ -62,9 +62,9 @@ def build_minio_client(
         retries=urllib3.Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504]),
     )
 
-    endpoints = endpoints.split(",")
+    endpoints_list = endpoints.split(",")
     minio_clients = []
-    for endpoint in endpoints:
+    for endpoint in endpoints_list:
         http_client = https_pool_manager if secure else http_pool_manager
         minio_client = Minio(
             endpoint,
@@ -89,14 +89,14 @@ class MinioBucket(IBucket):
     def __init__(self, bucket_name: str, minio_client: Minio, part_size: int | None = None) -> None:
         if part_size is None:
             part_size = self.DEFAULT_PART_SIZE
-        validate(MIN_PART_SIZE <= part_size <= MAX_PART_SIZE,
-                 f"part_size must be between {MIN_PART_SIZE} and {MAX_PART_SIZE}", exc=ValueError)
+        validate(MIN_PART_SIZE <= part_size <= MAX_PART_SIZE, f"part_size must be between {MIN_PART_SIZE} and {MAX_PART_SIZE}", exc=ValueError)
         self._minio_client = minio_client
         self._bucket_name = bucket_name
         self._part_size = part_size
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         with self.get_object_stream(name) as response:
+            assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
             try:
                 data = bytes()
                 for buffer in response.stream(amt=1024 * 1024):
@@ -114,7 +114,8 @@ class MinioBucket(IBucket):
                 raise FileNotFoundError(f"Object {_name} not found in bucket {self._bucket_name} on Minio") from e
             raise
 
-        return MinioObjectStream(response, name)
+        _name_path = PurePosixPath(_name) if isinstance(_name, str) else _name
+        return MinioObjectStream(response, _name_path)
 
     def fget_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         """
@@ -126,13 +127,7 @@ class MinioBucket(IBucket):
         try:
             self._minio_client.fget_object(self._bucket_name, _name, str(file_path))
         except FileNotFoundError as exc:
-            if os.name == "nt":
-                destination_str = str(file_path.resolve())
-                if len(destination_str) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
-                    raise RuntimeError(
-                        "Reduce the Minio cache path length, Windows has limitation on the path length. "
-                        "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
-                    ) from exc
+            self._validate_windows_path_length(str(file_path.resolve()), exc)
             raise
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
@@ -176,7 +171,7 @@ class MinioBucket(IBucket):
         except minio.error.S3Error as e:
             if e.code == "NoSuchKey":
                 return False
-            logging.exception(traceback.print_exc())
+            logging.exception(f"Error checking if object exists: {e}")
             raise
 
     def remove_objects(self, names: Iterable[PurePosixPath | str]) -> slist[DeleteError]:

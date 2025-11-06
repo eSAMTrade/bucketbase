@@ -41,7 +41,6 @@ ignore-patterns = ["test_.*"]
 load-plugins = ["pylint.extensions.no_self_use"]
 
 [tool.pylint.messages_control]
-max-line-length = 160
 disable = ["import-error",
     "missing-module-docstring",
     "missing-class-docstring",
@@ -52,9 +51,12 @@ disable = ["import-error",
     "too-many-instance-attributes",
     "logging-fstring-interpolation"]
 output-format = "colorized"
+enable = "useless-suppression"
+
+[tool.pylint.design]
+max-line-length = 160
 max-locals = 25
 max-args = 10
-enable = "useless-suppression"
 
 [tool.ruff]
 # Enable Pyflakes `E` and `F` codes by default.

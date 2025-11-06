@@ -1,8 +1,8 @@
 import io
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import BinaryIO, Iterable, Union
+from typing import BinaryIO, Generator, Iterable, Union
 
 from streamerate import slist, sset
 from streamerate import stream as sstream
@@ -101,7 +101,7 @@ class MemoryBucket(IBucket):
             return len(self._objects[_name])  # Direct access to stored object
 
     @contextmanager
-    def open_write_sync(self, name: PurePosixPath | str) -> AbstractContextManager[BinaryIO]:
+    def open_write_sync(self, name: PurePosixPath | str) -> Generator[BinaryIO, None, None]:
         """
         Synchronized version of the open_write, where we do not create any threads; This is intended to be used in performance critical paths.
 

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from io import IOBase
+from types import TracebackType
+from typing import BinaryIO, Iterable
 
 try:
-    from typing import final, override
+    from typing import (  # type: ignore[attr-defined, attr-defined]
+        Any,
+        Buffer,
+        final,
+        override,
+    )
 except ImportError:
-    from typing_extensions import final, override
+    from typing_extensions import Buffer, final, override  # type: ignore
 
 
 @final
-class NonClosingStream(IOBase):
+class NonClosingStream(IOBase, BinaryIO):
     """
     A delegating wrapper for file-like objects that prevents the underlying stream from being closed by callers
     that don't know about transport-side finalization semantics (for example, writers like ArrowSink used with S3).
@@ -35,13 +42,13 @@ class NonClosingStream(IOBase):
     def close(self) -> None:
         self._closed = True
 
-    def __del__(self):
+    def __del__(self) -> None:
         """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
         See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
         """
 
-    @override
     @property
+    @override
     def closed(self) -> bool:
         """Return True if the object is closed or its base is closed."""
         return self._closed or self._base.closed
@@ -51,28 +58,28 @@ class NonClosingStream(IOBase):
             raise ValueError("I/O operation on closed file")
 
     @override
-    def __iter__(self):
+    def __iter__(self) -> NonClosingStream:
         self._raise_if_stream_is_closed()
         return self
 
     @override
-    def __next__(self):
+    def __next__(self) -> bytes:
         self._raise_if_stream_is_closed()
         return next(self._base)
 
     @override
-    def __enter__(self):
+    def __enter__(self) -> NonClosingStream:
         self._raise_if_stream_is_closed()
         return self
 
     @override
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
         self.close()
 
     def close_base(self) -> None:
         self._base.close()
 
-    def write(self, *args, **kwargs) -> int:
+    def write(self, *args: Any, **kwargs: Any) -> int:
         self._raise_if_stream_is_closed()
         return self._base.write(*args, **kwargs)
 
@@ -136,6 +143,6 @@ class NonClosingStream(IOBase):
         return self._base.writable()
 
     @override
-    def writelines(self, lines) -> None:
+    def writelines(self, lines: Iterable[Buffer]) -> None:
         self._raise_if_stream_is_closed()
         return self._base.writelines(lines)
