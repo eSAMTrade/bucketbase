@@ -2,7 +2,6 @@
 import gc
 import os
 import threading
-import time
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO
@@ -98,20 +97,13 @@ class TestBackupMultiBucketMemoryLeakRegression(TestCase):
             except (TimeoutError, ExceptionGroup):
                 pass  # Expected - one bucket times out
             del multi_bucket
-            # list all threads heere:
-            for thread in threading.enumerate():
-                if thread.is_alive():
-                    print(
-                        "Thread: ",
-                        thread.name,
-                    )
-                else:
-                    print("Dead Thread: ", thread.name, " is not alive")
-                time.sleep(0.5)
 
             gc.collect()
             current_memory = self._get_memory_mb()
             memory_samples.append((f"retry_{i}", current_memory))
+
+        active_threads = threading.enumerate()
+        self.assertEqual(1, len(active_threads))
 
         final_memory = self._get_memory_mb()
         final_growth = final_memory - baseline_memory

@@ -26,11 +26,10 @@ class BackupMultiBucket(IBucket):
     def _raise_exc_if_fail(exceptions: list[Exception], exc: Exception | None = None) -> None:
         if exceptions:
             if len(exceptions) > 1:
+                _msg = "Failed to write to one or more writers"
                 if exc:
-                    # pylint: disable=using-exception-groups-in-unsupported-version
-                    raise ExceptionGroup("Failed to write to one or more writers", exceptions) from exc
-                # pylint: disable=using-exception-groups-in-unsupported-version
-                raise ExceptionGroup("Failed to write to one or more writers", exceptions)
+                    raise ExceptionGroup(_msg, exceptions) from exc  # pylint: disable=using-exception-groups-in-unsupported-version
+                raise ExceptionGroup(_msg, exceptions)  # pylint: disable=using-exception-groups-in-unsupported-version
             if exc:
                 raise exceptions[0] from exc
             raise exceptions[0]

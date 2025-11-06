@@ -66,7 +66,7 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         return self._wrapped_stream
 
     @staticmethod
-    def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
+    def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None) -> None:
         chained_exc = None
         for e in exc_chain:
             if chained_exc is not None:
@@ -75,12 +75,17 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         if chained_exc is not None:
             if exc_val is not None:
                 exc_val.__cause__ = chained_exc
-                raise exc_val.with_traceback(exc_tb) from chained_exc
+                raise exc_val from chained_exc
             raise chained_exc
-        if exc_val is not None:
-            raise exc_val.with_traceback(exc_tb)
 
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> bool:
+        # Clear the traceback of the exception passed by the caller to prevent memory leaks
+        # This is critical because if the caller stores this exception, it would hold onto
+        # stack frames containing large buffers
+        if exc_val is not None:
+            exc_val = exc_val.with_traceback(None)
+            exc_val.__traceback__ = None
+
         exceptions_chain = []
         if exc_val is not None:
             try:
@@ -102,7 +107,11 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         if self._exc is not None:
             exceptions_chain.append(self._exc)
 
-        self._raise_if_exception(exceptions_chain, exc_val, exc_tb)
+        # Don't pass exc_tb to avoid re-attaching traceback and causing memory leaks
+        self._raise_if_exception(exceptions_chain, exc_val)
+        if exc_val:
+            return False
+        return True
 
     def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:
