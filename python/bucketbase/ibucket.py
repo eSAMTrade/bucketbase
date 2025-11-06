@@ -66,7 +66,7 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         return self._wrapped_stream
 
     @staticmethod
-    def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None) -> None:
+    def _raise_if_exception_in_chain(exc_chain: list[BaseException], exc_val: BaseException | None) -> None:
         chained_exc = None
         for e in exc_chain:
             if chained_exc is not None:
@@ -79,13 +79,9 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
             raise chained_exc
 
     def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> bool:
-        # Clear the traceback of the exception passed by the caller to prevent memory leaks
-        # This is critical because if the caller stores this exception, it would hold onto
-        # stack frames containing large buffers
-        if exc_val is not None:
-            exc_val = exc_val.with_traceback(None)
-            exc_val.__traceback__ = None
-
+        """Clear the traceback of the exception passed by the caller to prevent memory leaks.
+        This is critical because if the caller stores this exception, it would hold onto stack frames containing large buffers
+        """
         exceptions_chain = []
         if exc_val is not None:
             try:
@@ -106,9 +102,9 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
             exceptions_chain.append(TimeoutError(f"Timeout waiting for thread to finish writing {self._name}"))
         if self._exc is not None:
             exceptions_chain.append(self._exc)
+            self._exc = None
 
-        # Don't pass exc_tb to avoid re-attaching traceback and causing memory leaks
-        self._raise_if_exception(exceptions_chain, exc_val)
+        self._raise_if_exception_in_chain(exceptions_chain, exc_val)
         if exc_val:
             return False
         return True

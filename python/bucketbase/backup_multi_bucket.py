@@ -56,7 +56,7 @@ class BackupMultiBucket(IBucket):
                         exceptions.append(e)
                         del active_writer_bucket_contexts_by_id[id(writer)]
                         with contextlib.suppress(Exception):  # Ignore context exit failures for failed writers
-                            context.__exit__(e.__class__, e, e.__traceback__)  # no need to pass the traceback here
+                            context.__exit__(e.__class__, e, e.__traceback__)
 
                         if not active_writer_bucket_contexts_by_id:
                             self._raise_exc_if_fail(exceptions)
