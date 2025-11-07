@@ -7,7 +7,8 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import Thread
-from typing import BinaryIO, Iterable, Optional, Tuple, Union
+from types import TracebackType
+from typing import BinaryIO, Generator, Iterable, Optional, Tuple, Union
 
 from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
@@ -41,7 +42,7 @@ class ObjectStream(AbstractContextManager[BinaryIO]):
     def __enter__(self) -> BinaryIO:
         return self._stream
 
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
         self._stream.close()
 
 
@@ -65,7 +66,7 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         return self._wrapped_stream
 
     @staticmethod
-    def _raise_if_exception(exc_chain: list[BaseException], exc_val: BaseException | None, exc_tb: object | None) -> None:
+    def _raise_if_exception_in_chain(exc_chain: list[BaseException], exc_val: BaseException | None) -> None:
         chained_exc = None
         for e in exc_chain:
             if chained_exc is not None:
@@ -74,31 +75,39 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         if chained_exc is not None:
             if exc_val is not None:
                 exc_val.__cause__ = chained_exc
-                raise exc_val.with_traceback(exc_tb) from chained_exc
+                raise exc_val from chained_exc
             raise chained_exc
-        if exc_val is not None:
-            raise exc_val.with_traceback(exc_tb)
 
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> bool:
+        """Clear the traceback of the exception passed by the caller to prevent memory leaks.
+        This is critical because if the caller stores this exception, it would hold onto stack frames containing large buffers
+        """
         exceptions_chain = []
         if exc_val is not None:
             try:
+                assert self._consumer_stream is not None
                 self._consumer_stream.send_exception_to_reader(exc_val)
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
         else:
             try:
+                assert self._wrapped_stream is not None
                 self._wrapped_stream.close_base()
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 exceptions_chain.append(e)
+        assert self._thread is not None
         self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
 
         if self._thread.is_alive():
             exceptions_chain.append(TimeoutError(f"Timeout waiting for thread to finish writing {self._name}"))
         if self._exc is not None:
             exceptions_chain.append(self._exc)
+            self._exc = None
 
-        self._raise_if_exception(exceptions_chain, exc_val, exc_tb)
+        self._raise_if_exception_in_chain(exceptions_chain, exc_val)
+        if exc_val:
+            return False
+        return True
 
     def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
         try:
@@ -128,7 +137,19 @@ class IBucket(PydanticStrictValidated, ABC):
     WINDOWS_MAX_PATH = 260
 
     @staticmethod
-    def _split_prefix(prefix: PurePosixPath | str) -> Tuple[Optional[str], Optional[str]]:
+    def _validate_windows_path_length(object_path: str | Path, exc: Optional[BaseException] = None) -> None:
+        _msg = (
+            "Reduce the Minio cache path length, Windows has limitation on the path length. "
+            "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
+        )
+        if os.name == "nt":
+            if len(str(object_path)) >= IBucket.WINDOWS_MAX_PATH - IBucket.MINIO_PATH_TEMP_SUFFIX_LEN:
+                if exc is None:
+                    raise OSError(_msg)
+                raise OSError(_msg) from exc
+
+    @staticmethod
+    def _split_prefix(prefix: PurePosixPath | str) -> Tuple[str, str]:
         """
         Validates & splits the given prefix into a "directory path" and a prefix.
         Throws ValueError if the prefix is invalid, thus this can be used to validate the prefix.
@@ -280,12 +301,7 @@ class IBucket(PydanticStrictValidated, ABC):
                 os.remove(file_path)  # For windows compatibility.
             os.rename(tmp_file_path, file_path)
         except FileNotFoundError as exc:
-            if os.name == "nt":
-                if len(str(tmp_file_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
-                    raise ValueError(
-                        "Reduce the Minio cache path length, Windows has limitation on the path length. "
-                        "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
-                    ) from exc
+            self._validate_windows_path_length(tmp_file_path, exc)
             raise
 
         finally:
@@ -352,7 +368,8 @@ class IBucket(PydanticStrictValidated, ABC):
             with bucket.open_write("data.parquet") as writer:
                 writer.write(b"parquet data...")
         """
-        return AsyncObjectWriter(name, self, timeout_sec)
+        _name = PurePosixPath(name) if isinstance(name, str) else name
+        return AsyncObjectWriter(_name, self, timeout_sec)
 
     def copy_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
@@ -554,7 +571,7 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         raise NotImplementedError()
 
     @contextmanager
-    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:  # type: ignore
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> Generator[BinaryIO, None, None]:
         """
         Returns a writable sink that supports multipart upload functionality in a synchronized manner.
         Prevents concurrent writes to the same object.

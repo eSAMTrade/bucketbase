@@ -1,4 +1,5 @@
-# _queue_binary_io.py
+from __future__ import annotations
+
 import io
 import queue
 import threading
@@ -9,7 +10,7 @@ from typing import Any, BinaryIO, Generic, Optional, TypeVar, Union
 try:
     from typing import override  # type: ignore
 except ImportError:
-    from typing_extensions import override  # type: ignore
+    from typing_extensions import override
 
 
 class _EOFSentinel:
@@ -27,14 +28,14 @@ class _ErrorWrapper:
 
 
 class BytesQueue:
-    def __init__(self):
-        self._buffers = deque()
+    def __init__(self) -> None:
+        self._buffers: deque[bytes] = deque()
         self._read_pos = 0
 
-    def append(self, data: bytes):
+    def append(self, data: bytes) -> None:
         self._buffers.append(bytes(data))  # copy bytes
 
-    def get_next(self, size=-1) -> bytes:
+    def get_next(self, size: int = -1) -> bytes:
         result = []
         while self._buffers and (size != 0):
             buf = self._buffers[0]
@@ -60,7 +61,7 @@ T = TypeVar("T")
 
 
 class StatefulEvent(Generic[T]):
-    def __init__(self):
+    def __init__(self) -> None:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._state: Optional[T] = None
@@ -70,7 +71,7 @@ class StatefulEvent(Generic[T]):
         with self._lock:
             if self._state is not None:
                 if id(state) != id(self._state):
-                    raise ValueError(f"StatefulEvent.set() called with different state: {state} != {self._state}")
+                    raise ValueError(f"StatefulEvent.set() called with different state: {state!r} != {self._state!r}")
             self._state = state
             self._event.set()
 
@@ -118,7 +119,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                     raise state
                 if state is self.SUCCESS_FLAG:
                     raise ValueError("Feed operation on an already closed read-stream")
-                raise RuntimeError(f"Unknown state: {state}")
+                raise RuntimeError(f"Unknown state: {state!r}")
             if self._closed_flag:
                 raise ValueError("Stream is closed")
             if self._writing_closed:
@@ -146,7 +147,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             raise state
         if state is self.SUCCESS_FLAG:
             return
-        raise RuntimeError(f"Unknown finish state: {state}")
+        raise RuntimeError(f"Unknown finish state: {state!r}")
 
     def wait_finish_state(self, timeout_sec: Optional[float] = None) -> BaseException | object | None:
         return self._finish_event.wait(timeout=timeout_sec)
@@ -169,19 +170,19 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             # pylint: disable=raise-missing-from
             raise RuntimeError(f"Failed to propagate exception to reader. Someone unexpected thread is putting data in the queue: {self._q.qsize()}")
 
-    def on_consumer_fail(self, exc: BaseException):
+    def on_consumer_fail(self, exc: BaseException) -> None:
         self._finish_event.set(exc)
         # we intentionally don't aquire the lock here, as on fail we don't care about consistency anymore
         self._closed_flag = True
 
-    def _get_no_wait_next_chunk_or_none(self) -> Optional[bytes]:
+    def _get_no_wait_next_chunk_or_none(self) -> Optional[bytes | _EOFSentinel | _ErrorWrapper]:
         try:
             item = self._q.get_nowait()
             return item
         except queue.Empty:
             return None
 
-    def notify_upload_success(self):
+    def notify_upload_success(self) -> None:
         with self._read_lock:
             temp = self._get_no_wait_next_chunk_or_none()
             while temp is _EOF:
@@ -193,9 +194,11 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 while temp is not None:
                     temp = self._get_no_wait_next_chunk_or_none()
                 self._buffer.get_next(-1)  # Clear buffer
-                raise self._exc_to_consumer.get_nowait()
+                exc = self._exc_to_consumer.get_nowait()
+                assert exc is not None, "Exception flag is set but no exception stored"
+                raise exc
             # Normal case - should be empty
-            assert temp is None, f"notify_upload_success() called before EOF, and queue contains {temp}"
+            assert temp is None, f"notify_upload_success() called before EOF, and queue contains {temp!r}"
             assert self._q.empty(), "notify_upload_success() called before EOF"
             assert self._buffer.get_next() == b""
 
@@ -233,7 +236,9 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 raise ValueError("Stream is closed")
             # Check for exceptions even after reading is finished
             if self._exc_to_consumer.is_set():
-                raise self._exc_to_consumer.get_nowait()
+                exc = self._exc_to_consumer.get_nowait()
+                assert exc is not None, "Exception flag is set but no exception stored"
+                raise exc
             if self._finished_reading.is_set():
                 return b""
             if size == 0:
@@ -243,7 +248,9 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 while True:
                     next_el = self._q.get()
                     if self._exc_to_consumer.is_set():
-                        raise self._exc_to_consumer.get_nowait()
+                        exc = self._exc_to_consumer.get_nowait()
+                        assert exc is not None, "Exception flag is set but no exception stored"
+                        raise exc
                     if next_el is _EOF:
                         self._finished_reading.set()
                         assert self._writing_closed, "EOF observed before send_eof() flagged _writing_closed"
@@ -264,13 +271,17 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             next_el = self._q.get()
             # Check for exceptions even after EOF
             if self._exc_to_consumer.is_set():
-                raise self._exc_to_consumer.get_nowait()
+                exc = self._exc_to_consumer.get_nowait()
+                assert exc is not None, "Exception flag is set but no exception stored"
+                raise exc
             if next_el is _EOF:
                 self._finished_reading.set()
                 assert self._writing_closed, "EOF observed before send_eof() flagged _writing_closed"
                 self._writing_closed = True
                 if self._exc_to_consumer.is_set():
-                    raise self._exc_to_consumer.get_nowait()
+                    exc = self._exc_to_consumer.get_nowait()
+                    assert exc is not None, "Exception flag is set but no exception stored"
+                    raise exc
                 return b""
             if isinstance(next_el, _ErrorWrapper):
                 self._exc_to_consumer.set(next_el.exc)
@@ -283,10 +294,12 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
             return next_el[:size]
 
     @override
-    def readinto(self, b) -> int:
+    def readinto(self, b: Any) -> int:
         with self._read_lock:
             if self._exc_to_consumer.is_set():
-                raise self._exc_to_consumer.get_nowait()
+                exc = self._exc_to_consumer.get_nowait()
+                assert exc is not None, "Exception flag is set but no exception stored"
+                raise exc
             # Optional fast-path; RawIOBase.read() would call this if we didn't override read()
             chunk = self.read(len(b))
             n = len(chunk)
@@ -294,7 +307,7 @@ class QueueBinaryReadable(io.RawIOBase, BinaryIO):
                 b[:n] = chunk
             return n
 
-    def __del__(self):
+    def __del__(self) -> None:
         """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
         See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
         """
@@ -314,7 +327,7 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
         return True
 
     @override
-    def write(self, b) -> int:
+    def write(self, b: Any) -> int:
         if len(b) == 0:
             return 0
         if self._closed:
@@ -334,7 +347,7 @@ class QueueBinaryWritable(io.RawIOBase, BinaryIO):
             self._consumer_stream.wait_upload_success_or_raise(timeout_sec=self._timeout_sec)  # Then wait for upload
         super().close()
 
-    def __del__(self):
+    def __del__(self) -> None:
         """This method is here to avoid calling super().__del__(), as it calls close(), and it leads to inconsistencies when exit with exception, and deadlocks
         See tests.bucket_tester.IBucketTester.test_regression_infinite_cycle_on_unentered_open_write_context for details
         """
