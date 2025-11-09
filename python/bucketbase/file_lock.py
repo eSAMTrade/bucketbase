@@ -20,11 +20,12 @@ class FileLockForPath(filelock.FileLock):
         return super()._acquire()
 
     def _release(self) -> None:
-        super()._release()
-        # Only delete lock file on macOS where it's safe
-        # On Linux/Windows, let filelock handle cleanup to avoid race conditions
-        if sys.platform.startswith("darwin"):
-            try:
-                os.remove(self._lock_file_path)
-            except OSError:
-                pass
+        try:
+            super()._release()
+        finally:
+            # On Linux/Windows, let filelock handle cleanup to avoid race conditions
+            if sys.platform.startswith("darwin"):
+                try:
+                    os.remove(self._lock_file_path)
+                except OSError:
+                    pass
