@@ -12,6 +12,7 @@ from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
 from minio.helpers import MAX_PART_SIZE, MIN_PART_SIZE
 from multiminio import MultiMinio
+from packaging import version as pkg_version
 from pyxtension import validate
 from streamerate import slist
 from streamerate import stream as sstream
@@ -81,10 +82,38 @@ def build_minio_client(  # pylint: disable=too-many-positional-arguments
     return minio_clients[0]
 
 
+def _detect_minio_object_name_attribute() -> bool:
+    """
+    Detect which attribute name is used by inspecting the Object class.
+    Returns True if .name should be used, False if .object_name. This is a hack to support both minio versions <=7.2.16 and >=7.2.17
+    """
+    # Check if Object class has 'name' as a direct attribute/property
+    obj_class = Object
+    # In newer versions, 'name' is a property; in older versions, 'object_name' is
+    has_name = hasattr(obj_class, "name") and isinstance(getattr(obj_class, "name", None), property)
+    has_object_name = hasattr(obj_class, "object_name") and isinstance(getattr(obj_class, "object_name", None), property)
+
+    if has_name:
+        return True
+    if has_object_name:
+        return False
+    try:
+        minio_version = pkg_version.parse(minio.__version__)
+        # Version 7.2.17 introduced the breaking change
+        return minio_version < pkg_version.parse("7.2.17")
+    except (AttributeError, ValueError):
+        # Fallback: try to detect from __init__ signature
+        import inspect  # pylint: disable=import-outside-toplevel
+
+        sig = inspect.signature(obj_class.__init__)
+        return "name" in sig.parameters
+
+
 class MinioBucket(IBucket):
     # Default part size for multipart uploads (16 MiB)
     # Increased from MinIO library default (5 MiB) for better performance and to allow for objects up to 160GiB
     DEFAULT_PART_SIZE = 16 * 1024 * 1024
+    _USES_NAME_ATTRIBUTE: bool = _detect_minio_object_name_attribute()
 
     def __init__(self, bucket_name: str, minio_client: Minio, part_size: int | None = None) -> None:
         if part_size is None:
@@ -93,6 +122,10 @@ class MinioBucket(IBucket):
         self._minio_client = minio_client
         self._bucket_name = bucket_name
         self._part_size = part_size
+
+    @classmethod
+    def _get_object_name(cls, obj: Object) -> str:
+        return obj.name if cls._USES_NAME_ATTRIBUTE else obj.object_name
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         with self.get_object_stream(name) as response:
@@ -148,7 +181,8 @@ class MinioBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         _prefix = str(prefix)
         listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_prefix, recursive=True)
-        object_names = sstream(listing_itr).map(Object.object_name.fget).map(PurePosixPath).to_list()
+        # Handle both old and new minio versions: newer versions use .name instead of .object_name
+        object_names = sstream(listing_itr).map(self._get_object_name).map(PurePosixPath).to_list()
         return object_names
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
@@ -158,7 +192,8 @@ class MinioBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         _prefix = str(prefix)
         listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_prefix, recursive=False)
-        object_names = sstream(listing_itr).map(Object.object_name.fget).to_list()
+        # Handle both old and new minio versions: newer versions use .name instead of .object_name
+        object_names = sstream(listing_itr).map(self._get_object_name).to_list()
         prefixes = object_names.filter(lambda x: x.endswith("/")).to_list()
         objects = object_names.filter(lambda x: not x.endswith("/")).map(PurePosixPath).to_list()
         return ShallowListing(objects=objects, prefixes=prefixes)
