@@ -1,10 +1,11 @@
 import contextlib
 import logging
-import sys
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
-if sys.version_info < (3, 11):
+try:
+    _ = ExceptionGroup.__class__  # pylint: disable=used-before-assignment
+except NameError:
     from exceptiongroup import ExceptionGroup
 
 from streamerate import slist, sset
