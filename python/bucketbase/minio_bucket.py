@@ -36,7 +36,7 @@ class MinioObjectStream(ObjectStream):
 
 
 def build_minio_client(  # pylint: disable=too-many-positional-arguments
-    endpoints: str, access_key: str, secret_key: str, secure: bool = True, region: str | None = "custom", conn_pool_size: int = 128, timeout: int = 5
+    endpoints: str, access_key: str, secret_key: str, secure: bool = True, region: str | None = None, conn_pool_size: int = 128, timeout: int = 5
 ) -> Minio:
     """
     :param endpoints: comma separated list of endpoints

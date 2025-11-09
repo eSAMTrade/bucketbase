@@ -57,6 +57,7 @@ class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
         self._consumer_stream: Optional[QueueBinaryReadable] = None
 
     def __enter__(self) -> NonClosingStream:
+        self._exc = None
         self._consumer_stream = QueueBinaryReadable()
         self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
         queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
