@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def"
 import gc
 import os
+import sys
 import tempfile
 import threading
 from io import BytesIO
@@ -9,7 +10,9 @@ from typing import Any, BinaryIO
 from unittest import TestCase
 
 import psutil
-from exceptiongroup import ExceptionGroup
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
 from minio import Minio
 
 from bucketbase import MemoryBucket, MinioBucket, ShallowListing

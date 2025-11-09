@@ -1,9 +1,12 @@
 import contextlib
 import logging
+import sys
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
-from exceptiongroup import ExceptionGroup
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
 from streamerate import slist, sset
 from typing_extensions import override
 
