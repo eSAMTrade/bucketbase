@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bucketbase"
-version = "1.5.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
+version = "1.5.1"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
 authors = ["Andrei Suiu <andrei.suiu@gmail.com>"]
 repository = "https://github.com/asuiu/bucketbase"
