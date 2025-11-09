@@ -3,7 +3,11 @@ import logging
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
-from exceptiongroup import ExceptionGroup
+try:
+    _ = ExceptionGroup.__class__  # pylint: disable=used-before-assignment
+except NameError:
+    from exceptiongroup import ExceptionGroup
+
 from streamerate import slist, sset
 from typing_extensions import override
 

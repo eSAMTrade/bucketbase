@@ -9,7 +9,13 @@ from typing import Any, BinaryIO
 from unittest import TestCase
 
 import psutil
-from exceptiongroup import ExceptionGroup
+
+try:
+    _ = ExceptionGroup.__class__
+except NameError:
+    from exceptiongroup import ExceptionGroup
+
+
 from minio import Minio
 
 from bucketbase import MemoryBucket, MinioBucket, ShallowListing
