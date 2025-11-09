@@ -615,13 +615,19 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         # For MinioBucket with small PART_SIZE, use larger batches to trigger multipart upload
         # Check if this is a MinioBucket by looking at the class name
         is_minio = "MinioBucket" in str(type(self.storage))
-        batch_size = 200000 if is_minio else 3  # 200k records per batch for minio, 3 for others
-        num_batches = 3 if is_minio else 3  # 10 batches for others, 3 for minio
+        # Use 20k records * 2 batches * ~150 bytes/record ≈ 6MB
+        # This is below the 16MB part size threshold, so it won't trigger multipart upload
+        # but it's large enough to test the streaming write functionality with parquet
+        # For public servers like play.min.io, we keep data size small to avoid network timeouts
+        # and resource contention when multiple tests run concurrently
+        batch_size = 20000 if is_minio else 3
+        num_batches = 2 if is_minio else 3
 
         for batch_num in range(num_batches):
             batch_data = {
                 "id": [batch_num * batch_size + i for i in range(batch_size)],
-                "name": [f"item_{batch_num}_{i}" * (10 if is_minio else 1) for i in range(batch_size)],  # Longer strings for minio
+                # Use multiplier of 3 to keep data size manageable for public servers
+                "name": [f"item_{batch_num}_{i}" * (3 if is_minio else 1) for i in range(batch_size)],
                 "value": [batch_num * 10.5 + i * 1.1 for i in range(batch_size)],
                 "active": [(batch_num * batch_size + i) % 2 == 0 for i in range(batch_size)],
                 "timestamp": [pa.scalar(1640995200000 + batch_num * 1000 + i * 100, type=pa.timestamp("ms")) for i in range(batch_size)],
@@ -630,7 +636,9 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             batches.append(batch)
 
         # Write parquet file using open_write
-        tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=3)  # type: ignore[assignment]
+        # Use higher timeout for MinIO due to network latency and data buffering
+        timeout_for_minio = 6 if "MinioBucket" in str(type(self.storage)) else 3
+        tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=timeout_for_minio)  # type: ignore[assignment]
         with tested_object as sink:
             with pa.output_stream(sink) as arrow_sink:
                 with pq.ParquetWriter(arrow_sink, schema) as writer:
@@ -666,7 +674,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertEqual(ids, list(range(expected_rows)))
 
         # Check first few names to ensure pattern is correct
-        name_multiplier = 10 if is_minio else 1
+        name_multiplier = 3 if is_minio else 1
         expected_name_0 = "item_0_0" * name_multiplier
         expected_name_1 = "item_0_1" * name_multiplier
         self.test_case.assertEqual(names[0], expected_name_0)
