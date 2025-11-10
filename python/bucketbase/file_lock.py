@@ -20,9 +20,12 @@ class FileLockForPath(filelock.FileLock):
         return super()._acquire()
 
     def _release(self) -> None:
-        if sys.platform.startswith("darwin"):
-            try:
-                os.remove(self._lock_file_path)
-            except OSError:
-                pass
-        return super()._release()
+        try:
+            super()._release()
+        finally:
+            # On Linux/Windows, let filelock handle cleanup to avoid race conditions
+            if sys.platform.startswith("darwin"):
+                try:
+                    os.remove(self._lock_file_path)
+                except OSError:
+                    pass
