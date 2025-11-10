@@ -8,7 +8,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import BinaryIO, Union
+from typing import BinaryIO, Iterator, Union
 from unittest import TestCase
 from unittest.mock import Mock
 
@@ -66,6 +66,9 @@ class MockMainBucket(IBucket):
         raise NotImplementedError()
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
+        raise NotImplementedError()
+
+    def open_write(self, name: PurePosixPath | str) -> Iterator[BinaryIO]:
         raise NotImplementedError()
 
     def __init__(self, content: bytes = b"test data"):

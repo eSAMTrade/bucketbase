@@ -1,13 +1,10 @@
 import io
+import logging
 import tempfile
 import threading
 from pathlib import Path, PurePosixPath
 from unittest import TestCase
 from unittest.mock import MagicMock
-
-from bucketbase.ibucket import AbstractAppendOnlySynchronizedBucket
-from bucketbase.named_lock_manager import ThreadLockManager
-from tests.bucket_tester import IBucketTester
 
 from bucketbase import (
     AppendOnlyFSBucket,
@@ -16,6 +13,12 @@ from bucketbase import (
     IBucket,
     MemoryBucket,
 )
+from bucketbase.ibucket import AbstractAppendOnlySynchronizedBucket
+from bucketbase.named_lock_manager import ThreadLockManager
+from tests.bucket_tester import IBucketTester
+
+loggerr = logging.getLogger(__name__)
+logging.basicConfig(level=logging.ERROR, format="%(message)s")
 
 
 class SynchronizedMockMemoryBucket(AbstractAppendOnlySynchronizedBucket):
@@ -222,7 +225,6 @@ class TestIntegratedCachedImmutableBucket(TestCase):
 
     def test_cachedappendonly_one_fetch_from_main_bucket(self):
         # Test concurrent access to CachedImmutableBucket to verify object is only fetched once from main bucket
-
         num_threads = 29
 
         obj_name = "concurrent_test_object"
@@ -259,7 +261,8 @@ class TestIntegratedCachedImmutableBucket(TestCase):
                 thread.start()
 
             for thread in threads:
-                thread.join()
+                thread.join(timeout=2.0)
+                self.assertFalse(thread.is_alive(), "Thread did not complete within timeout")
 
             # Verify results
             self.assertEqual(len(get_object_calls), 1, "Main bucket's get_object should be called exactly once")

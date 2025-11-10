@@ -1,12 +1,22 @@
 import io
+from contextlib import contextmanager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import Iterable, Union, BinaryIO
+from typing import BinaryIO, Generator, Iterable, Union
 
-from streamerate import slist, sset, stream
+from streamerate import slist, sset
+from streamerate import stream as sstream
 
 from bucketbase import DeleteError
-from bucketbase.ibucket import ShallowListing, IBucket, ObjectStream
+from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
+
+
+class _NonClosingBytesIO(io.BytesIO):
+    def close(self) -> None:  # do not actually close to allow final read
+        pass
+
+    def really_close(self) -> None:
+        super().close()
 
 
 class MemoryBucket(IBucket):
@@ -16,7 +26,7 @@ class MemoryBucket(IBucket):
     """
 
     def __init__(self) -> None:
-        self._objects = {}  # Store files
+        self._objects: dict[str, bytes] = {}
         self._lock = RLock()
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
@@ -46,7 +56,7 @@ class MemoryBucket(IBucket):
         self._split_prefix(prefix)  # validate prefix
         str_prefix = str(prefix)
         with self._lock:
-            result = stream(self._objects).filter(lambda obj: str(obj).startswith(str_prefix)).map(PurePosixPath).to_list()
+            result = sstream(self._objects).filter(lambda obj: str(obj).startswith(str_prefix)).map(PurePosixPath).to_list()
         return result
 
     def shallow_list_objects(self, prefix: PurePosixPath | str = "") -> ShallowListing:
@@ -89,3 +99,42 @@ class MemoryBucket(IBucket):
             if _name not in self._objects:
                 raise FileNotFoundError(f"Object {_name} not found in MemoryObjectStore")
             return len(self._objects[_name])  # Direct access to stored object
+
+    @contextmanager
+    def open_write_sync(self, name: PurePosixPath | str) -> Generator[BinaryIO, None, None]:
+        """
+        Synchronized version of the open_write, where we do not create any threads; This is intended to be used in performance critical paths.
+
+        Returns a writable sink that accumulates bytes in memory; on close, stores the
+        object under 'name'. Suitable for tests and small files.
+        """
+        _name = self._validate_name(name)
+
+        sink = _NonClosingBytesIO()
+        exception_occurred = False
+        try:
+            yield sink
+        except BaseException:
+            exception_occurred = True
+            raise
+        finally:
+            # Attempt to read buffer regardless of prior close by pyarrow
+            try:
+                sink.flush()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            try:
+                content = sink.getvalue()
+            finally:
+                # ensure we free memory
+                if hasattr(sink, "really_close"):
+                    sink.really_close()
+                else:
+                    try:
+                        sink.close()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+            # Only store content if no exception occurred
+            if not exception_occurred:
+                with self._lock:
+                    self._objects[_name] = content

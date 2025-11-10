@@ -1,6 +1,10 @@
 import io
+from contextlib import AbstractContextManager
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Union
+from typing import BinaryIO, Iterable, Optional, Union
+
+from pyxtension import validate
+from streamerate import slist
 
 from bucketbase.errors import DeleteError
 from bucketbase.fs_bucket import AppendOnlyFSBucket
@@ -10,8 +14,6 @@ from bucketbase.ibucket import (
     ObjectStream,
     ShallowListing,
 )
-from pyxtension import validate
-from streamerate import slist
 
 
 class CachedImmutableBucket(IBucket):
@@ -24,8 +26,8 @@ class CachedImmutableBucket(IBucket):
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """
         Note: At the first sight it would seem that concurrent calls to get_object may lead to multiple simultaneous calls to put_from_bucket,
-            causing redundant fetches from the main bucket. But the put_from_bucket is synchronized, so only one thread will actually fetch the object from the main bucket,
-            and all the concurrent threads will wait for the first thread to complete the PUT operation, and would throw FileExistsError,
+            causing redundant fetches from the main bucket. But the put_from_bucket is synchronized, so only one thread will actually fetch the object
+            from the main bucket, and all the concurrent threads will wait for the first thread to complete the PUT operation, and would throw FileExistsError,
             after which it's clear that the object is already in the cache.
         """
         name_str = str(name)
@@ -80,3 +82,10 @@ class CachedImmutableBucket(IBucket):
             return self._cache.get_size(name)
         except FileNotFoundError:
             return self._main.get_size(name)
+
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable sink that delegates to the main bucket.
+        Since this is an immutable bucket, writes go directly to the main bucket.
+        """
+        raise io.UnsupportedOperation("open_write is not supported for CachedImmutableBucket")
