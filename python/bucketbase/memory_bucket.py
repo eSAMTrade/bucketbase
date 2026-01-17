@@ -1,8 +1,11 @@
 import io
+import multiprocessing
+import weakref
 from contextlib import contextmanager
+from multiprocessing.managers import SyncManager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import BinaryIO, Generator, Iterable, Union
+from typing import Any, BinaryIO, Generator, Iterable, MutableMapping, Optional, Union
 
 from streamerate import slist, sset
 from streamerate import stream as sstream
@@ -26,8 +29,52 @@ class MemoryBucket(IBucket):
     """
 
     def __init__(self) -> None:
-        self._objects: dict[str, bytes] = {}
-        self._lock = RLock()
+        self._objects: MutableMapping[str, bytes] = {}
+        self._lock: Any = RLock()
+        self._manager = None  # Internal manager handle for shared buckets
+
+    @classmethod
+    def create_shared(cls, manager: Optional[SyncManager] = None) -> "MemoryBucket":
+        """
+        Creates a MemoryBucket instance that is automatically shared across processes.
+
+        If a 'manager' is provided, it uses it to create shared structures and the caller
+        is responsible for the manager's lifecycle (shutdown).
+        If not, it creates a new manager internally and registers a weak-ref finalizer
+        to shut it down when the bucket is garbage collected.
+
+        Note: The shared bucket's data lives only as long as the Manager process.
+        Pickling a shared bucket preserves the proxy references, but unpickling after
+        the Manager has been shut down will raise connection errors.
+        """
+
+        if manager is None:
+            try:
+                ctx = multiprocessing.get_context("spawn")
+            except AttributeError:
+                ctx = multiprocessing
+            manager = ctx.Manager()
+            should_shutdown = True
+        else:
+            should_shutdown = False
+
+        bucket = cls()
+        # Override local state with shared state from the manager
+        bucket._objects = manager.dict()
+        bucket._lock = manager.RLock()
+        bucket._manager = manager if should_shutdown else None
+
+        if should_shutdown:
+            # Register a finalizer to shut down the manager when 'bucket' is GC-ed
+            weakref.finalize(bucket, manager.shutdown)
+
+        return bucket
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Ensure the manager handle itself is not picklable
+        state["_manager"] = None
+        return state
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         _name = self._validate_name(name)
