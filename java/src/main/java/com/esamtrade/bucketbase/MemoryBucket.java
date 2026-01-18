@@ -61,6 +61,12 @@ public class MemoryBucket extends BaseBucket {
     }
 
     @Override
+    public long getSize(PurePosixPath name) throws IOException {
+        byte[] content = getObject(name);
+        return content.length;
+    }
+
+    @Override
     public List<PurePosixPath> listObjects(PurePosixPath prefix) {
         splitPrefix(prefix); // validate prefix
         String strPrefix = prefix.toString();

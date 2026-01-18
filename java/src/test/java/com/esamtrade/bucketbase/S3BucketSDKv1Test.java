@@ -3,6 +3,7 @@ package com.esamtrade.bucketbase;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -38,6 +39,17 @@ class S3BucketSDKv1Test {
     @Test
     void putObjectAndGetObjectStream() throws IOException {
         tester.testPutAndGetObjectStream();
+    }
+
+    @Test
+    @Disabled("AWS SDK V1's S3ObjectInputStream does not support mark/reset operations required for Parquet reading")
+    void testPutAndGetParquetObjectStream() throws IOException {
+        tester.testPutAndGetParquetObjectStream();
+    }
+
+    @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
     }
 
     @Test
