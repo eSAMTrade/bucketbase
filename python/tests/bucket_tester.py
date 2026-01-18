@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from queue import Queue
 from typing import BinaryIO
 from unittest import TestCase
+import uuid
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -87,7 +88,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.storage = storage
         self.test_case = test_case
         # Next is a unique suffix to be used in the names of dirs and files, so they will be unique
-        self.us = f"{iTSms.now() % 100_000_000:08d}"
+        self.us = uuid.uuid4().hex
 
     def cleanup(self) -> None:
         self.storage.remove_prefix(f"dir{self.us}")
