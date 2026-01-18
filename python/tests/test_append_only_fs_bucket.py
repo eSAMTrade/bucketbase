@@ -46,7 +46,9 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         bucket_in_test.put_object(object_name, content)
 
         verifier_manager = FileLockManager(self.locks_path)
-        self.assertTrue(verifier_manager.get_lock(object_name).acquire(timeout=0.1), "Lock should have been released after put_object")
+        v_lock = verifier_manager.get_lock(object_name)
+        self.assertTrue(v_lock.acquire(timeout=0.1), "Lock should have been released after put_object")
+        v_lock.release()
         self.assertEqual(base_bucket_put_calls, [(object_name, content)])
 
     def test_put_object_twice_raises_exception(self):
@@ -96,7 +98,9 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
             verifier_manager.get_lock(object_name).acquire(timeout=0.1)
 
         bucket_in_test._unlock_object(object_name)
-        self.assertTrue(verifier_manager.get_lock(object_name).acquire(timeout=0.1), "Lock should have been released after _unlock_object")
+        v_lock = verifier_manager.get_lock(object_name)
+        self.assertTrue(v_lock.acquire(timeout=0.1), "Lock should have been released after _unlock_object")
+        v_lock.release()
 
     def test_unlocking_unlocked_object_raises_assertion(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)

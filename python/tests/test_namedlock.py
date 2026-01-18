@@ -72,6 +72,7 @@ class FileLockManagerTests(unittest.TestCase):
         lock2.acquire()
 
         verifier_manager = FileLockManager(self.temp_dir)
+        # We expect TimeoutError because filelock.Timeout is a subclass of it.
         with self.assertRaises(TimeoutError):
             verifier_manager.get_lock(name1).acquire(timeout=0.1)
         with self.assertRaises(TimeoutError):
@@ -80,10 +81,12 @@ class FileLockManagerTests(unittest.TestCase):
         lock1.release()
         lock2.release()
 
-        self.assertTrue(verifier_manager.get_lock(name1).acquire(timeout=0.1))
-        verifier_manager.get_lock(name1).release()
-        self.assertTrue(verifier_manager.get_lock(name2).acquire(timeout=0.1))
-        verifier_manager.get_lock(name2).release()
+        v_lock1 = verifier_manager.get_lock(name1)
+        self.assertTrue(v_lock1.acquire(timeout=0.1))
+        v_lock1.release()
+        v_lock2 = verifier_manager.get_lock(name2)
+        self.assertTrue(v_lock2.acquire(timeout=0.1))
+        v_lock2.release()
 
     def test_lock_directory_created(self):
         # Delete the directory to test creation
