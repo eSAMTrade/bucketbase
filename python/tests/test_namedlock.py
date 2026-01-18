@@ -71,20 +71,22 @@ class FileLockManagerTests(unittest.TestCase):
         lock1.acquire()
         lock2.acquire()
 
-        verifier_manager = FileLockManager(self.temp_dir)
-        # We expect TimeoutError because filelock.Timeout is a subclass of it.
-        with self.assertRaises(TimeoutError):
-            verifier_manager.get_lock(name1).acquire(timeout=0.1)
-        with self.assertRaises(TimeoutError):
-            verifier_manager.get_lock(name2).acquire(timeout=0.1)
+        lock_verifier = FileLockManager(self.temp_dir)
+        try:
+            # Attempting to acquire already-held locks should timeout, raising TimeoutError
+            # (filelock.Timeout is a subclass of TimeoutError).
+            with self.assertRaises(TimeoutError):
+                lock_verifier.get_lock(name1).acquire(timeout=0.1)
+            with self.assertRaises(TimeoutError):
+                lock_verifier.get_lock(name2).acquire(timeout=0.1)
+        finally:
+            lock1.release()
+            lock2.release()
 
-        lock1.release()
-        lock2.release()
-
-        v_lock1 = verifier_manager.get_lock(name1)
+        v_lock1 = lock_verifier.get_lock(name1)
         self.assertTrue(v_lock1.acquire(timeout=0.1))
         v_lock1.release()
-        v_lock2 = verifier_manager.get_lock(name2)
+        v_lock2 = lock_verifier.get_lock(name2)
         self.assertTrue(v_lock2.acquire(timeout=0.1))
         v_lock2.release()
 
@@ -100,7 +102,7 @@ class FileLockManagerTests(unittest.TestCase):
         self.assertTrue(self.temp_dir.exists())
         self.assertTrue(self.temp_dir.is_dir())
 
-    def test_possibly_stale_lock_file_does_not_block_new_manager(self):
+    def test_released_lock_can_be_reacquired_by_new_manager(self):
         name = "some_lock"
         lock1 = self.lock_manager.get_lock(name)
         lock1.acquire()

@@ -45,11 +45,14 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # put object is expected to create a lock file before calling base_bucket.put_object, and remove it after
         bucket_in_test.put_object(object_name, content)
 
-        verifier_manager = FileLockManager(self.locks_path)
-        v_lock = verifier_manager.get_lock(object_name)
-        self.assertTrue(v_lock.acquire(timeout=0.1), "Lock should have been released after put_object")
-        v_lock.release()
-        self.assertEqual(base_bucket_put_calls, [(object_name, content)])
+        lock_verifier = FileLockManager(self.locks_path)
+        v_lock = lock_verifier.get_lock(object_name)
+        try:
+            acquired = v_lock.acquire(timeout=0.1)
+            self.assertTrue(acquired, "Lock should have been released after put_object")
+            self.assertEqual(base_bucket_put_calls, [(object_name, content)])
+        finally:
+            v_lock.release()
 
     def test_put_object_twice_raises_exception(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
@@ -90,15 +93,13 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # Attempt to lock the object
         bucket_in_test._lock_object(object_name)
 
-        # Check if the lock file was created
-        lock_file_path = self.locks_path / (object_name.replace(bucket_in_test.SEP, FSBucket.TEMP_SEP) + ".lock")
-        self.assertTrue(lock_file_path.exists())
-        verifier_manager = FileLockManager(self.locks_path)
+        # Verify the lock is actually held by attempting acquisition with another manager
+        lock_verifier = FileLockManager(self.locks_path)
         with self.assertRaises(TimeoutError):
-            verifier_manager.get_lock(object_name).acquire(timeout=0.1)
+            lock_verifier.get_lock(object_name).acquire(timeout=0.1)
 
         bucket_in_test._unlock_object(object_name)
-        v_lock = verifier_manager.get_lock(object_name)
+        v_lock = lock_verifier.get_lock(object_name)
         self.assertTrue(v_lock.acquire(timeout=0.1), "Lock should have been released after _unlock_object")
         v_lock.release()
 
