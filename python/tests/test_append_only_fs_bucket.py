@@ -7,6 +7,7 @@ from pathlib import Path
 
 from bucketbase import MemoryBucket
 from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
+from bucketbase.named_lock_manager import FileLockManager
 
 
 class TestAppendOnlyFSBucket(unittest.TestCase):
@@ -44,7 +45,8 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # put object is expected to create a lock file before calling base_bucket.put_object, and remove it after
         bucket_in_test.put_object(object_name, content)
 
-        self.assertFalse(lock_file_path.exists())
+        verifier_manager = FileLockManager(self.locks_path)
+        self.assertTrue(verifier_manager.get_lock(object_name).acquire(timeout=0.1), "Lock should have been released after put_object")
         self.assertEqual(base_bucket_put_calls, [(object_name, content)])
 
     def test_put_object_twice_raises_exception(self):
@@ -89,9 +91,12 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # Check if the lock file was created
         lock_file_path = self.locks_path / (object_name.replace(bucket_in_test.SEP, FSBucket.TEMP_SEP) + ".lock")
         self.assertTrue(lock_file_path.exists())
+        verifier_manager = FileLockManager(self.locks_path)
+        with self.assertRaises(TimeoutError):
+            verifier_manager.get_lock(object_name).acquire(timeout=0.1)
 
         bucket_in_test._unlock_object(object_name)
-        self.assertFalse(lock_file_path.exists())
+        self.assertTrue(verifier_manager.get_lock(object_name).acquire(timeout=0.1), "Lock should have been released after _unlock_object")
 
     def test_unlocking_unlocked_object_raises_assertion(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
@@ -213,3 +218,7 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         t2.join()
         self.assertListEqual(results, ["thread1_done", "thread2_file_exists"])
         self.assertEqual(bucket_in_test.get_object(object_name), content1)
+
+
+if __name__ == "__main__":
+    unittest.main()
