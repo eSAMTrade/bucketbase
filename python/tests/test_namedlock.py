@@ -71,16 +71,19 @@ class FileLockManagerTests(unittest.TestCase):
         lock1.acquire()
         lock2.acquire()
 
-        # Verify both lock files were created with sanitized names
-        files = list(self.temp_dir.glob("*"))
-        sanitized_names = [f.name for f in files]
+        verifier_manager = FileLockManager(self.temp_dir)
+        with self.assertRaises(TimeoutError):
+            verifier_manager.get_lock(name1).acquire(timeout=0.1)
+        with self.assertRaises(TimeoutError):
+            verifier_manager.get_lock(name2).acquire(timeout=0.1)
 
-        self.assertIn("path#with#slashes.lock", sanitized_names)
-        self.assertIn("path#with#slashes2.lock", sanitized_names)
         lock1.release()
         lock2.release()
 
-        self.assertEqual(0, len(list(self.temp_dir.glob("*"))))
+        self.assertTrue(verifier_manager.get_lock(name1).acquire(timeout=0.1))
+        verifier_manager.get_lock(name1).release()
+        self.assertTrue(verifier_manager.get_lock(name2).acquire(timeout=0.1))
+        verifier_manager.get_lock(name2).release()
 
     def test_lock_directory_created(self):
         # Delete the directory to test creation
@@ -93,3 +96,18 @@ class FileLockManagerTests(unittest.TestCase):
 
         self.assertTrue(self.temp_dir.exists())
         self.assertTrue(self.temp_dir.is_dir())
+
+    def test_possibly_stale_lock_file_does_not_block_new_manager(self):
+        name = "some_lock"
+        lock1 = self.lock_manager.get_lock(name)
+        lock1.acquire()
+        lock1.release()
+
+        new_manager = FileLockManager(self.temp_dir)
+        lock2 = new_manager.get_lock(name)
+        self.assertTrue(lock2.acquire(timeout=0.1))
+        lock2.release()
+
+
+if __name__ == "__main__":
+    unittest.main()
