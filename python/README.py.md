@@ -162,7 +162,7 @@ The code in this project is licensed under MIT license.
 ##### 1.1.0 (breaking changes)
 
 - IBucket rename: get_object_content() -> get_object()
-- IBucket.fput_oject() rename arg: destination -> file_path
+- IBucket.fput_object() rename arg: destination -> file_path
 
 ##### 1.0.1
 

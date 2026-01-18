@@ -3,14 +3,20 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Optional, Tuple, Union
+from threading import Thread
+from types import TracebackType
+from typing import BinaryIO, Generator, Iterable, Optional, Tuple, Union
 
-from bucketbase.errors import DeleteError
-from pyxtension import PydanticValidated, validate
+from pyxtension import PydanticStrictValidated, validate
 from streamerate import slist
 from typing_extensions import Self
+
+from bucketbase._queue_binary_io import QueueBinaryReadable, QueueBinaryWritable
+from bucketbase.errors import DeleteError
+from bucketbase.utils import NonClosingStream
 
 # Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 # As an exception - we won't allow "*" as a valid character in the name due to complications with the file systems
@@ -28,7 +34,7 @@ class ShallowListing:
     prefixes: slist[str]
 
 
-class ObjectStream:
+class ObjectStream(AbstractContextManager[BinaryIO]):
     def __init__(self, stream: BinaryIO, name: PurePosixPath) -> None:
         self._stream = stream
         self._name = name
@@ -36,11 +42,84 @@ class ObjectStream:
     def __enter__(self) -> BinaryIO:
         return self._stream
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
         self._stream.close()
 
 
-class IBucket(PydanticValidated, ABC):
+class AsyncObjectWriter(AbstractContextManager[NonClosingStream]):
+    def __init__(self, name: PurePosixPath, bucket: "IBucket", timeout_sec: Optional[float] = None) -> None:
+        self._name = name
+        self._bucket = bucket
+        self._timeout_sec = timeout_sec
+        self._exc: Optional[BaseException] = None
+        self._thread: Optional[Thread] = None
+        self._wrapped_stream: Optional[NonClosingStream] = None
+        self._consumer_stream: Optional[QueueBinaryReadable] = None
+
+    def __enter__(self) -> NonClosingStream:
+        self._exc = None
+        self._consumer_stream = QueueBinaryReadable()
+        self._thread = Thread(target=self._write_to_bucket, args=(self._name, self._consumer_stream), daemon=True)
+        queue_feeder = QueueBinaryWritable(self._consumer_stream, timeout_sec=self._timeout_sec)
+        self._wrapped_stream = NonClosingStream(queue_feeder)
+        self._thread.start()
+
+        return self._wrapped_stream
+
+    @staticmethod
+    def _raise_if_exception_in_chain(exc_chain: list[BaseException], exc_val: BaseException | None) -> None:
+        chained_exc = None
+        for e in exc_chain:
+            if chained_exc is not None:
+                e.__cause__ = chained_exc
+            chained_exc = e
+        if chained_exc is not None:
+            if exc_val is not None:
+                exc_val.__cause__ = chained_exc
+                raise exc_val from chained_exc
+            raise chained_exc
+
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> bool:
+        """Clear the traceback of the exception passed by the caller to prevent memory leaks.
+        This is critical because if the caller stores this exception, it would hold onto stack frames containing large buffers
+        """
+        exceptions_chain = []
+        if exc_val is not None:
+            try:
+                assert self._consumer_stream is not None
+                self._consumer_stream.send_exception_to_reader(exc_val)
+            except BaseException as e:  # pylint: disable=broad-exception-caught
+                exceptions_chain.append(e)
+        else:
+            try:
+                assert self._wrapped_stream is not None
+                self._wrapped_stream.close_base()
+            except BaseException as e:  # pylint: disable=broad-exception-caught
+                exceptions_chain.append(e)
+        assert self._thread is not None
+        self._thread.join(timeout=self._timeout_sec)  # Wait for thread to finish
+
+        if self._thread.is_alive():
+            exceptions_chain.append(TimeoutError(f"Timeout waiting for thread to finish writing {self._name}"))
+        if self._exc is not None:
+            exceptions_chain.append(self._exc)
+            self._exc = None
+
+        self._raise_if_exception_in_chain(exceptions_chain, exc_val)
+        if exc_val:
+            return False
+        return True
+
+    def _write_to_bucket(self, name: PurePosixPath, consumer_stream: QueueBinaryReadable) -> None:
+        try:
+            self._bucket.put_object_stream(name, consumer_stream)
+            consumer_stream.notify_upload_success()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            consumer_stream.on_consumer_fail(e)
+            self._exc = e
+
+
+class IBucket(PydanticStrictValidated, ABC):
     """
     This class is intended to be a base class for all object storage implementations.
     - it should not have any minio specific code
@@ -59,7 +138,19 @@ class IBucket(PydanticValidated, ABC):
     WINDOWS_MAX_PATH = 260
 
     @staticmethod
-    def _split_prefix(prefix: PurePosixPath | str) -> Tuple[Optional[str], Optional[str]]:
+    def _validate_windows_path_length(object_path: str | Path, exc: Optional[BaseException] = None) -> None:
+        _msg = (
+            "Reduce the Minio cache path length, Windows has limitation on the path length. "
+            "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
+        )
+        if os.name == "nt":
+            if len(str(object_path)) >= IBucket.WINDOWS_MAX_PATH - IBucket.MINIO_PATH_TEMP_SUFFIX_LEN:
+                if exc is None:
+                    raise OSError(_msg)
+                raise OSError(_msg) from exc
+
+    @staticmethod
+    def _split_prefix(prefix: PurePosixPath | str) -> Tuple[str, str]:
         """
         Validates & splits the given prefix into a "directory path" and a prefix.
         Throws ValueError if the prefix is invalid, thus this can be used to validate the prefix.
@@ -211,12 +302,7 @@ class IBucket(PydanticValidated, ABC):
                 os.remove(file_path)  # For windows compatibility.
             os.rename(tmp_file_path, file_path)
         except FileNotFoundError as exc:
-            if os.name == "nt":
-                if len(str(tmp_file_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
-                    raise ValueError(
-                        "Reduce the Minio cache path length, Windows has limitation on the path length. "
-                        "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
-                    ) from exc
+            self._validate_windows_path_length(tmp_file_path, exc)
             raise
 
         finally:
@@ -265,6 +351,27 @@ class IBucket(PydanticValidated, ABC):
         """
         raise NotImplementedError()
 
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> AbstractContextManager[BinaryIO]:
+        """
+        Returns a writable stream that, for MinIO, supports multipart upload functionality.
+        The returned writer accumulates bytes and stores the object under 'name' when the context exits.
+
+        This method is intended to be used by pyarrow to write Parquet files in a streaming fashion,
+        supporting S3 multipart upload for efficient large file transfers, or CSV streaming
+
+        :param name: Name of the object to store
+        :return: Context manager yielding a BinaryIO sink for writing
+        :raises ValueError: If name is invalid
+        :raises FileExistsError: If the object already exists
+        :raises IOError: If sink operations fail
+
+        Example usage:
+            with bucket.open_write("data.parquet") as writer:
+                writer.write(b"parquet data...")
+        """
+        _name = PurePosixPath(name) if isinstance(name, str) else name
+        return AsyncObjectWriter(_name, self, timeout_sec)
+
     def copy_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
         Copies all objects with given src_prefix to the dst_prefix, from self to dest_bucket.
@@ -287,6 +394,13 @@ class IBucket(PydanticValidated, ABC):
 
         max_threads = max(1, min(threads, len(src_objects)))
         src_objects.fastmap(_copy_object, poolSize=max_threads).size()
+
+    def copy_object_from(self, src_bucket: Self, src_name: PurePosixPath | str, dst_name: PurePosixPath | str) -> None:
+        """
+        Copies an object from src_bucket to self.
+        """
+        with src_bucket.get_object_stream(src_name) as stream:
+            self.put_object_stream(dst_name, stream)
 
     def move_prefix(self, dst_bucket: Self, src_prefix: PurePosixPath | str, dst_prefix: PurePosixPath | str = "", threads: int = 1) -> None:
         """
@@ -456,3 +570,24 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         :param name: Name of the object to unlock
         """
         raise NotImplementedError()
+
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> Generator[BinaryIO, None, None]:
+        """
+        Returns a writable sink that supports multipart upload functionality in a synchronized manner.
+        Prevents concurrent writes to the same object.
+
+        :param name: Name of the object to store
+        :return: Context manager yielding a BinaryIO sink for writing
+        :raises ValueError: If name is invalid
+        :raises FileExistsError: If the object already exists
+        :raises IOError: If sink operations fail
+        """
+        self._lock_object(name)
+        try:
+            if self._base_bucket.exists(name):
+                raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
+            with self._base_bucket.open_write(name, timeout_sec) as sink:
+                yield sink
+        finally:
+            self._unlock_object(name)

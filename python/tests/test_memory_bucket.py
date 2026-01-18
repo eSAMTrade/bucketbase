@@ -29,3 +29,45 @@ class TestMemoryBucket(TestCase):
 
     def test_get_size(self):
         self.tester.test_get_size()
+
+    def test_open_write(self):
+        self.tester.test_open_write()
+
+    def test_open_write_timeout(self):
+        self.tester.test_open_write_timeout()
+
+    def test_open_write_consumer_throws(self):
+        self.tester.test_open_write_consumer_throws()
+
+    def test_open_write_feeder_throws(self):
+        self.tester.test_open_write_feeder_throws()
+
+    def test_open_write_with_parquet(self):
+        self.tester.test_open_write_with_parquet()
+
+    def test_streaming_failure_atomicity(self):
+        self.tester.test_streaming_failure_atomicity()
+
+    def test_put_object_stream_exception_cleanup(self):
+        self.tester.test_put_object_stream_exception_cleanup()
+
+    def test_open_write_partial_write_exception_cleanup(self):
+        self.tester.test_open_write_partial_write_exception_cleanup()
+
+    def test_open_write_without_proper_close(self):
+        self.tester.test_open_write_without_proper_close()
+
+    def test_open_write_sync_exception_cleanup(self):
+        self.tester.test_open_write_sync_exception_cleanup()
+
+    def test_regression_parquet_exception_thrown_in_prq_writer_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_parquet_writer_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_arrow_sink_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_arrow_sink_context_doesnt_save_object()
+
+    def test_regression_exception_thrown_in_open_write_context_by_AMX(self):
+        self.tester.test_regression_exception_thrown_in_open_write_context_doesnt_save_object()
+
+    def test_regression_infinite_cycle_on_unentered_open_write_context(self):
+        self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()

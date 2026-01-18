@@ -1,10 +1,11 @@
 import os
 import threading
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from random import random
 from time import sleep, time, time_ns
-from typing import BinaryIO, Iterable, Optional, Union
+from typing import BinaryIO, Generator, Iterable, Optional, Union
 
 from streamerate import slist
 
@@ -20,16 +21,18 @@ from bucketbase.named_lock_manager import FileLockManager
 
 class FSObjectStream(ObjectStream):
     def __init__(self, path: Path, name: PurePosixPath) -> None:
-        super().__init__(None, name)
+        # Initialize with a placeholder stream that will be replaced in __enter__
+        super().__init__(None, name)  # type: ignore[arg-type]
         self._path = path
 
     def __enter__(self) -> BinaryIO:
         self._stream = self._path.open("rb")
         return self._stream
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self._stream.close()
-        self._stream = None
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
+        if self._stream:
+            self._stream.close()
+        self._stream = None  # type: ignore[assignment]
 
 
 class FSBucket(IBucket):
@@ -84,17 +87,18 @@ class FSBucket(IBucket):
             temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
             with temp_obj_path.open("wb") as f:
                 while chunk := stream.read(self.BUFFER_SIZE):
-                    # ToDo: we can optimize this process by performing the read of the next chunk in async, while the current chunk is being written,
-                    #       since bottleneck is IO: https://github.com/eSAMTrade/bucketbase/issues/134
+                    # NOTE: Optimization possible: perform the read of the next chunk in async, while the current chunk is being written.
+                    # See: https://github.com/eSAMTrade/bucketbase/issues/134
                     f.write(chunk)
             self._try_rename_tmp_file(temp_obj_path, _object_path)
         except FileNotFoundError as exc:
-            if os.name == "nt":
-                if len(str(_object_path)) >= self.WINDOWS_MAX_PATH - self.MINIO_PATH_TEMP_SUFFIX_LEN:
-                    raise ValueError(
-                        "Reduce the Minio cache path length, Windows has limitation on the path length. "
-                        "More details here: https://docs.python.org/3/using/windows.html#removing-the-max-path-limitation"
-                    ) from exc
+            # Clean up temporary file on failure
+            temp_obj_path.unlink(missing_ok=True)
+            self._validate_windows_path_length(_object_path, exc)
+            raise
+        except Exception:
+            # Clean up temporary file on any other failure
+            temp_obj_path.unlink(missing_ok=True)
             raise
 
     def _try_rename_tmp_file(self, tmp_file_path: Path, object_path: Path) -> None:
@@ -109,6 +113,27 @@ class FSBucket(IBucket):
                 # sleep between 50 and 100 ms
                 sleep(0.05 + 0.05 * random())
         raise IOError(f"Timeout renaming temp file {tmp_file_path} to {object_path}")
+
+    @contextmanager
+    def open_write(self, name: PurePosixPath | str, timeout_sec: Optional[float] = None) -> Generator[BinaryIO, None, None]:
+        """
+        Returns a writable sink that uses temporary files and atomic rename operations.
+        Suitable for large files and ensures atomic writes to the filesystem.
+        """
+        _name = self._validate_name(name)
+        _object_path = self._root / _name
+        temp_obj_path = self._get_tmp_obj_path(name)
+
+        try:
+            temp_obj_path.parent.mkdir(parents=True, exist_ok=True)
+            with temp_obj_path.open("wb") as sink:
+                yield sink
+            self._try_rename_tmp_file(temp_obj_path, _object_path)
+        except BaseException:
+            # Clean up temporary file if something goes wrong
+            if temp_obj_path.exists():
+                temp_obj_path.unlink(missing_ok=True)
+            raise
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         """
@@ -168,6 +193,7 @@ class FSBucket(IBucket):
         """
         s_prefix = self._validate_prefix(prefix)
         dir_path, name_prefix = self._split_prefix(s_prefix)
+        assert dir_path is not None and name_prefix is not None, "dir_path and name_prefix should not be None"
         start_list_lpath = self._root / dir_path
 
         listing = start_list_lpath.glob(name_prefix + "*")
@@ -191,7 +217,7 @@ class FSBucket(IBucket):
         _obj_path = self._root / _name
         return _obj_path.exists() and _obj_path.is_file()
 
-    def _try_remove_empty_dirs(self, p):
+    def _try_remove_empty_dirs(self, p: Path) -> None:
         dir_to_remove = p.parent
         while dir_to_remove.relative_to(self._root).parts:
             try:
@@ -214,7 +240,7 @@ class FSBucket(IBucket):
             try:
                 p.unlink(missing_ok=True)
             except Exception as e:  # pylint: disable=broad-except
-                delete_errors.append(DeleteError(code=404, message=e, name=str(obj)))
+                delete_errors.append(DeleteError(code="404", message=str(e), name=str(obj)))
             else:
                 self._try_remove_empty_dirs(p)
         return delete_errors
@@ -240,11 +266,11 @@ class AppendOnlyFSBucket(AbstractAppendOnlySynchronizedBucket):
         self._locks_path = locks_path
         self._lock_manager = FileLockManager(locks_path)
 
-    def _lock_object(self, name: PurePosixPath | str):
+    def _lock_object(self, name: PurePosixPath | str) -> None:
         lock = self._lock_manager.get_lock(name)
         lock.acquire()
 
-    def _unlock_object(self, name: PurePosixPath | str):
+    def _unlock_object(self, name: PurePosixPath | str) -> None:
         lock = self._lock_manager.get_lock(name, only_existing=True)
         lock.release()
 

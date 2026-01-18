@@ -76,7 +76,7 @@ dest_bucket = MinioBucket(endpoint="localhost:9000", access_key="minioadmin", se
 bucket.put_object("greet.txt", "Hello, Minio!")
 
 bucket.copy_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="copy_dir/")
-bucket.move_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="move_dir/")                   
+bucket.move_prefix(dst_bucket=dest_bucket, src_prefix="greet.", dst_prefix="move_dir/")
 ```
 
 ### Using Synchronized Append-Only Storage
@@ -116,6 +116,17 @@ Contributions are welcome! If you'd like to contribute, please fork the reposito
 The code in this project is licensed under MIT license.
 
 ### Changelog
+
+##### 1.4.8
+
+- Fixed GC related BUG in AsyncObjectWriter reproducible when AsyncObjectWriter context is not entered.
+- Credits to [Maxim Morari](https://github.com/MorariMaxim) for the BUG report.
+
+##### 1.4.7
+
+- Added important feature to AsyncObjectWriter to properly work with the file-objects like ArrowSink that is not aware of the finalization semantics.
+    - for these purpose the bucketbase.utils.NonClosingStream was added
+- Credits to [Alexandru Maximciuc](https://github.com/amaximciuc) for the feature request and to [Maxim Morari](https://github.com/MorariMaxim) for the implementation.
 
 ##### 1.4.0
 
@@ -162,7 +173,7 @@ The code in this project is licensed under MIT license.
 ##### 1.1.0 (breaking changes)
 
 - IBucket rename: get_object_content() -> get_object()
-- IBucket.fput_oject() rename arg: destination -> file_path
+- IBucket.fput_object() rename arg: destination -> file_path
 
 ##### 1.0.1
 

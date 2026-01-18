@@ -5,9 +5,9 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 
-from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
-
 from bucketbase import MemoryBucket
+from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
+from bucketbase.named_lock_manager import FileLockManager
 
 
 class TestAppendOnlyFSBucket(unittest.TestCase):
@@ -45,8 +45,14 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # put object is expected to create a lock file before calling base_bucket.put_object, and remove it after
         bucket_in_test.put_object(object_name, content)
 
-        self.assertFalse(lock_file_path.exists())
-        self.assertEqual(base_bucket_put_calls, [(object_name, content)])
+        lock_verifier = FileLockManager(self.locks_path)
+        v_lock = lock_verifier.get_lock(object_name)
+        try:
+            acquired = v_lock.acquire(timeout=0.1)
+            self.assertTrue(acquired, "Lock should have been released after put_object")
+            self.assertEqual(base_bucket_put_calls, [(object_name, content)])
+        finally:
+            v_lock.release()
 
     def test_put_object_twice_raises_exception(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
@@ -87,12 +93,15 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # Attempt to lock the object
         bucket_in_test._lock_object(object_name)
 
-        # Check if the lock file was created
-        lock_file_path = self.locks_path / (object_name.replace(bucket_in_test.SEP, FSBucket.TEMP_SEP) + ".lock")
-        self.assertTrue(lock_file_path.exists())
+        # Verify the lock is actually held by attempting acquisition with another manager
+        lock_verifier = FileLockManager(self.locks_path)
+        with self.assertRaises(TimeoutError):
+            lock_verifier.get_lock(object_name).acquire(timeout=0.1)
 
         bucket_in_test._unlock_object(object_name)
-        self.assertFalse(lock_file_path.exists())
+        v_lock = lock_verifier.get_lock(object_name)
+        self.assertTrue(v_lock.acquire(timeout=0.1), "Lock should have been released after _unlock_object")
+        v_lock.release()
 
     def test_unlocking_unlocked_object_raises_assertion(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
@@ -172,3 +181,49 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         self.assertFalse(bucket_in_test.exists(object_name))
         self.base_bucket.put_object(object_name, content)
         self.assertTrue(bucket_in_test.exists(object_name))
+
+    def test_open_write_nominal(self):
+        bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
+        object_name = "test_object"
+        content = b"test content"
+        with bucket_in_test.open_write(object_name) as sink:
+            sink.write(content)
+        self.assertEqual(bucket_in_test.get_object(object_name), content)
+
+    def test_open_write_from_multiple_threads(self):
+        bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
+        object_name = "test_object"
+        content1 = b"thread1 content"
+        content2 = b"thread2 content"
+        results = []
+        first_thread_started = threading.Event()
+
+        def thread1_func():
+            with bucket_in_test.open_write(object_name) as sink:
+                first_thread_started.set()
+                sink.write(content1)
+                time.sleep(0.1)
+                results.append("thread1_done")
+
+        def thread2_func():
+            first_thread_started.wait()
+            try:
+                with bucket_in_test.open_write(object_name) as sink:
+                    sink.write(content2)
+                    results.append("thread2 should not get here")
+                results.append("thread2_success")
+            except FileExistsError:
+                results.append("thread2_file_exists")
+
+        t1 = threading.Thread(target=thread1_func)
+        t2 = threading.Thread(target=thread2_func)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        self.assertListEqual(results, ["thread1_done", "thread2_file_exists"])
+        self.assertEqual(bucket_in_test.get_object(object_name), content1)
+
+
+if __name__ == "__main__":
+    unittest.main()
