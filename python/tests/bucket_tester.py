@@ -638,7 +638,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
 
         # Write parquet file using open_write
         # Use higher timeout for MinIO due to network latency and data buffering
-        timeout_for_minio = 12 if "MinioBucket" in str(type(self.storage)) else 3
+        timeout_for_minio = 30 if "MinioBucket" in str(type(self.storage)) else 3
         tested_object: AsyncObjectWriter = self.storage.open_write(parquet_path, timeout_sec=timeout_for_minio)  # type: ignore[assignment]
         with tested_object as sink:
             with pa.output_stream(sink) as arrow_sink:
