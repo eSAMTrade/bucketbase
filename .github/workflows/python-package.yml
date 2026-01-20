@@ -37,7 +37,7 @@ jobs:
         env:
           POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          uv pip install poetry
+          uv pip install --system poetry
           cd python
           poetry install --with dev
       - name: Run tests
@@ -64,7 +64,7 @@ jobs:
         env:
           POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          uv pip install poetry
+          uv pip install --system poetry
           cd python
           poetry install --with dev
       - name: Run tests in container
