@@ -39,6 +39,7 @@ jobs:
         run: |
           uv pip install --system poetry
           cd python
+          poetry lock
           poetry install --with dev
       - name: Run tests
         env:
