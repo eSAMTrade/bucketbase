@@ -1,3 +1,4 @@
+import atexit
 import multiprocessing
 import pickle
 from unittest import TestCase
@@ -89,12 +90,17 @@ class SharedManagerMixin:
         if cls._shared_manager is None:
             ctx = cls.get_multiprocessing_context()
             cls._shared_manager = ctx.Manager()
+            # Ensure the manager is shut down when the process exits
+            atexit.register(cls.shutdown_shared_manager)
         return cls._shared_manager
 
     @classmethod
     def shutdown_shared_manager(cls):
         if cls._shared_manager is not None:
-            cls._shared_manager.shutdown()
+            try:
+                cls._shared_manager.shutdown()
+            except (AttributeError, RuntimeError):
+                pass
             cls._shared_manager = None
 
 

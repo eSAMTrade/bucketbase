@@ -47,16 +47,14 @@ class MemoryBucket(IBucket):
     @classmethod
     def create_shared(cls, manager: Optional[SyncManager] = None) -> "MemoryBucket":
         """
-        Creates a MemoryBucket instance that is automatically shared across processes.
+        Creates a MemoryBucket shared across processes via a multiprocessing Manager.
 
-        If a 'manager' is provided, it uses it to create shared structures and the caller
-        is responsible for the manager's lifecycle (shutdown).
-        If not, it creates a new manager internally and registers a weakref finalizer
-        to shut it down when the bucket is garbage collected.
+        CRITICAL: Data persists ONLY as long as the Manager process is running.
+        Accessing or unpickling the bucket after Manager shutdown will raise errors.
 
-        Note: The shared bucket's data lives only as long as the Manager process.
-        Pickling a shared bucket preserves the proxy references, but unpickling after
-        the Manager has been shut down will raise connection errors.
+        If 'manager' is None, a new one is created and shut down automatically via
+        weakref finalizer when the bucket is garbage collected. Otherwise, the caller
+        is responsible for the manager's lifecycle.
         """
 
         if manager is None:
