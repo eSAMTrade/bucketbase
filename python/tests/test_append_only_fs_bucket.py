@@ -127,23 +127,33 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
     def test_lock_object_with_threads(self):
         bucket_in_test = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
         object_name = "shared_object"
-        lock_acquired = [False, False]  # To track lock acquisition in threads
+        # Use Events for reliable thread synchronization(handshake), avoiding sleep-based timing issues
+        lock_held_event = threading.Event()
+        second_thread_ready_event = threading.Event()
+        second_thread_completed_event = threading.Event()
 
         def lock_and_release_first():
             bucket_in_test._lock_object(object_name)
-            lock_acquired[0] = True
-            time.sleep(0.1)  # Simulate work by sleeping
+            lock_held_event.set()
+            self.assertTrue(second_thread_ready_event.wait(timeout=5.0), "Second thread failed to signal readiness")
+            time.sleep(0.2)
             bucket_in_test._unlock_object(object_name)
-            lock_acquired[0] = False
 
         def wait_and_lock_second():
-            time.sleep(0.001)  # Ensure this runs after the first thread has acquired the lock
+            self.assertTrue(lock_held_event.wait(timeout=5.0), "First thread failed to acquire lock in time")
+            
+            second_thread_ready_event.set()
+            
             t1 = time.time()
             bucket_in_test._lock_object(object_name)
             t2 = time.time()
-            print(f"Time taken to acquire lock: {t2 - t1}")
-            self.assertTrue(t2 - t1 > 0.1, "The second thread should have waited for the first thread to release the lock")
-            lock_acquired[1] = True  # Should only reach here after the first thread releases the lock
+            
+            # Since first thread sleeps for 0.2s *after* we are ready, we should be blocked for a significant time
+            duration = t2 - t1
+            print(f"Time taken to acquire lock: {duration}")
+            self.assertGreater(duration, 0.1, f"Second thread acquired lock too fast ({duration}s), should have been blocked")
+            
+            second_thread_completed_event.set()
             bucket_in_test._unlock_object(object_name)
 
         # Create threads
@@ -154,12 +164,10 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         thread2.start()
 
         # Wait for both threads to complete
-        thread1.join()
-        thread2.join()
+        thread1.join(timeout=10.0)
+        thread2.join(timeout=10.0)
 
-        # Verify that both threads were able to acquire the lock
-        self.assertFalse(lock_acquired[0], "The first thread should have released the lock")
-        self.assertTrue(lock_acquired[1], "The second thread should have acquired the lock after the first thread released it")
+        self.assertTrue(second_thread_completed_event.is_set(), "The second thread did not complete correctly")
 
     def test_get_size(self):
         bucket = AppendOnlyFSBucket(self.base_bucket, self.locks_path)
