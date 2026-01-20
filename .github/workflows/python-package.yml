@@ -25,16 +25,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
+        env:
+          POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install poetry
+          uv pip install poetry
           cd python
-          poetry lock
           poetry install --with dev
       - name: Run tests
         env:
@@ -52,12 +56,16 @@ jobs:
       image: python:3.12-bullseye
     steps:
       - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - name: Install dependencies in container
+        env:
+          POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install poetry
+          uv pip install poetry
           cd python
-          poetry lock
           poetry install --with dev
       - name: Run tests in container
         env:
