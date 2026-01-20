@@ -2,10 +2,10 @@ import io
 import multiprocessing
 import weakref
 from contextlib import contextmanager
-from multiprocessing.managers import SyncManager
+from multiprocessing.managers import DictProxy, SyncManager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import Any, BinaryIO, Generator, Iterable, MutableMapping, Optional, Union
+from typing import Any, BinaryIO, Generator, Iterable, Optional, Union
 
 from streamerate import slist, sset
 from streamerate import stream as sstream
@@ -22,6 +22,16 @@ class _NonClosingBytesIO(io.BytesIO):
         super().close()
 
 
+def _safe_manager_shutdown(manager: Any) -> None:
+    """Helper to safely shut down a SyncManager during GC."""
+    try:
+        shutdown = getattr(manager, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
 class MemoryBucket(IBucket):
     """
     Implements IObjectStorage interface, but stores all objects in memory.
@@ -29,9 +39,10 @@ class MemoryBucket(IBucket):
     """
 
     def __init__(self) -> None:
-        self._objects: MutableMapping[str, bytes] = {}
+        self._objects: dict[str, bytes] | DictProxy[str, bytes] = {}
         self._lock: Any = RLock()
-        self._manager = None  # Internal manager handle for shared buckets
+        self._manager: SyncManager | None = None
+        self._owns_manager: bool = False
 
     @classmethod
     def create_shared(cls, manager: Optional[SyncManager] = None) -> "MemoryBucket":
@@ -40,7 +51,7 @@ class MemoryBucket(IBucket):
 
         If a 'manager' is provided, it uses it to create shared structures and the caller
         is responsible for the manager's lifecycle (shutdown).
-        If not, it creates a new manager internally and registers a weak-ref finalizer
+        If not, it creates a new manager internally and registers a weakref finalizer
         to shut it down when the bucket is garbage collected.
 
         Note: The shared bucket's data lives only as long as the Manager process.
@@ -49,31 +60,28 @@ class MemoryBucket(IBucket):
         """
 
         if manager is None:
-            try:
-                ctx = multiprocessing.get_context("spawn")
-            except AttributeError:
-                ctx = multiprocessing
+            ctx = multiprocessing.get_context("spawn")
             manager = ctx.Manager()
-            should_shutdown = True
+            owns_manager = True
         else:
-            should_shutdown = False
+            owns_manager = False
 
-        bucket = cls()
-        # Override local state with shared state from the manager
+        bucket = cls.__new__(cls)
         bucket._objects = manager.dict()
         bucket._lock = manager.RLock()
-        bucket._manager = manager if should_shutdown else None
+        bucket._manager = manager
+        bucket._owns_manager = owns_manager
 
-        if should_shutdown:
+        if owns_manager:
             # Register a finalizer to shut down the manager when 'bucket' is GC-ed
-            weakref.finalize(bucket, manager.shutdown)
+            weakref.finalize(bucket, _safe_manager_shutdown, manager)
 
         return bucket
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        # Ensure the manager handle itself is not picklable
         state["_manager"] = None
+        state["_owns_manager"] = False
         return state
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:

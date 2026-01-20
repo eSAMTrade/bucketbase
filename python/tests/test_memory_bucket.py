@@ -81,9 +81,13 @@ class SharedManagerMixin:
     _shared_manager = None
 
     @classmethod
+    def get_multiprocessing_context(cls):
+        return multiprocessing.get_context("spawn")
+
+    @classmethod
     def get_shared_manager(cls):
         if cls._shared_manager is None:
-            ctx = multiprocessing.get_context("spawn")
+            ctx = cls.get_multiprocessing_context()
             cls._shared_manager = ctx.Manager()
         return cls._shared_manager
 
@@ -186,9 +190,20 @@ class TestMemoryBucketPickle(TestCase, SharedManagerMixin):
         unpickled_bucket: MemoryBucket = pickle.loads(pickled_data)
         self.assertEqual(unpickled_bucket.get_object("shared.txt"), b"shared data")
 
+    def test_unpickle_after_manager_shutdown_raises_error(self):
+        bucket = MemoryBucket.create_shared()
+        bucket.put_object("abc", b"123")
+        pickled_data = pickle.dumps(bucket)
 
-class TestSharedMemoryBucketMultiprocessing(TestCase, SharedManagerMixin):
-    """Stress tests for MemoryBucket with multiple processes."""
+        bucket._manager.shutdown()
+
+        with self.assertRaises((EOFError, ConnectionError, BrokenPipeError, FileNotFoundError, Exception)):
+            unpickled_bucket: MemoryBucket = pickle.loads(pickled_data)
+            unpickled_bucket.get_object("abc")
+
+
+class TestSharedMemoryBucketMultiprocessingCorrectness(TestCase, SharedManagerMixin):
+    """Functional correctness tests for MemoryBucket with multiple processes."""
 
     @classmethod
     def tearDownClass(cls):
@@ -203,18 +218,23 @@ class TestSharedMemoryBucketMultiprocessing(TestCase, SharedManagerMixin):
         with bucket.open_write(f"stream_{index}.txt") as writer:
             writer.write(f"streamed_content_{index}".encode())
 
-    def _helper_run_multiprocess_orchestration(self, worker_target, num_processes=3):
+    def _helper_run_multiprocess_orchestration(self, worker_target, num_processes=3, args=None):
         bucket = MemoryBucket.create_shared(manager=self.get_shared_manager())
-        ctx = multiprocessing.get_context("spawn")
-        processes = [ctx.Process(target=worker_target, args=(bucket, i)) for i in range(num_processes)]
+        ctx = self.get_multiprocessing_context()
+        processes = []
+        for i in range(num_processes):
+            worker_args = (bucket, i) if args is None else (bucket,) + args
+            p = ctx.Process(target=worker_target, args=worker_args)
+            processes.append(p)
+
         for p in processes:
             p.start()
         for p in processes:
             p.join()
         return bucket
 
-    def test_shared_memory_bucket_factory_creates_isolated_manager(self):
-        """Verify that create_shared() without manager creates its own isolated manager."""
+    def test_create_shared_without_manager_parameter(self):
+        """Verify that create_shared() without manager parameter works."""
         bucket_factory = MemoryBucket.create_shared()
         bucket_factory.put_object("factory.txt", b"ok")
         self.assertEqual(bucket_factory.get_object("factory.txt"), b"ok")
@@ -232,3 +252,23 @@ class TestSharedMemoryBucketMultiprocessing(TestCase, SharedManagerMixin):
         self.assertEqual(len(bucket.list_objects()), 3)
         for i in range(3):
             self.assertEqual(bucket.get_object(f"stream_{i}.txt"), f"streamed_content_{i}".encode())
+
+    @staticmethod
+    def worker_increment(bucket, key, iters=50):
+        for _ in range(iters):
+            with bucket._lock:  # Using the shared lock from the manager
+                try:
+                    current = int(bucket.get_object(key).decode())
+                except FileNotFoundError:
+                    current = 0
+                bucket.put_object(key, str(current + 1).encode())
+
+    def test_concurrent_shared_lock_behavior(self):
+        """Verify that multiple processes can coordinate via the shared bucket lock."""
+        key = "counter"
+        num_procs = 4
+        iters = 50
+        bucket = self._helper_run_multiprocess_orchestration(self.worker_increment, num_processes=num_procs, args=(key, iters))
+
+        final_val = int(bucket.get_object(key).decode())
+        self.assertEqual(final_val, num_procs * iters)
