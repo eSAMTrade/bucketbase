@@ -141,18 +141,18 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
 
         def wait_and_lock_second():
             self.assertTrue(lock_held_event.wait(timeout=5.0), "First thread failed to acquire lock in time")
-            
+
             second_thread_ready_event.set()
-            
+
             t1 = time.time()
             bucket_in_test._lock_object(object_name)
             t2 = time.time()
-            
+
             # Since first thread sleeps for 0.2s *after* we are ready, we should be blocked for a significant time
             duration = t2 - t1
             print(f"Time taken to acquire lock: {duration}")
             self.assertGreater(duration, 0.1, f"Second thread acquired lock too fast ({duration}s), should have been blocked")
-            
+
             second_thread_completed_event.set()
             bucket_in_test._unlock_object(object_name)
 
@@ -166,6 +166,8 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         # Wait for both threads to complete
         thread1.join(timeout=10.0)
         thread2.join(timeout=10.0)
+        self.assertFalse(thread1.is_alive(), "The first thread did not finish")
+        self.assertFalse(thread2.is_alive(), "The second thread did not finish")
 
         self.assertTrue(second_thread_completed_event.is_set(), "The second thread did not complete correctly")
 

@@ -5,18 +5,17 @@ import io
 import tempfile
 import threading
 import time
+import uuid
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from queue import Queue
 from typing import BinaryIO
 from unittest import TestCase
-import uuid
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from streamerate import slist
 from streamerate import stream as sstream
-from tsx import iTSms
 
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
 
@@ -66,11 +65,11 @@ class FailingStream(io.IOBase):
         self.bytes_processed += len(data)
         return len(data)
 
-    def close(self):
+    def close(self) -> None:
         self._is_closed = True
 
     @property
-    def closed(self):
+    def closed(self) -> bool:
         return self._is_closed
 
     def readable(self) -> bool:

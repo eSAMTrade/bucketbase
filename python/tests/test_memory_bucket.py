@@ -4,6 +4,7 @@ import pickle
 from unittest import TestCase
 
 from bucketbase import MemoryBucket
+from bucketbase.memory_bucket import SharedMemoryBucket
 from tests.bucket_tester import IBucketTester
 
 
@@ -75,8 +76,14 @@ class TestMemoryBucket(TestCase):
     def test_regression_infinite_cycle_on_unentered_open_write_context(self):
         self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()
 
+    def test_throws_on_pickle(self):
+        bucket = MemoryBucket()
+        with self.assertRaises(TypeError) as cm:
+            pickle.dumps(bucket)
+        self.assertIn("RLock", str(cm.exception))
 
-class SharedManagerMixin:
+
+class _SharedManagerMixin:
     """Provides a single shared manager for all shared memory tests to speed up execution."""
 
     _shared_manager = None
@@ -104,7 +111,7 @@ class SharedManagerMixin:
             cls._shared_manager = None
 
 
-class TestSharedMemoryBucket(TestCase, SharedManagerMixin):
+class TestSharedMemoryBucket(TestCase, _SharedManagerMixin):
     """
     Runs ALL MemoryBucket tests using shared state to ensure full compatibility.
     """
@@ -114,7 +121,7 @@ class TestSharedMemoryBucket(TestCase, SharedManagerMixin):
         cls.manager = cls.get_shared_manager()
 
     def setUp(self):
-        self.storage = MemoryBucket.create_shared(manager=self.manager)
+        self.storage = SharedMemoryBucket(manager=self.manager)
         self.tester = IBucketTester(self.storage, self)
 
     def test_put_and_get_object(self):
@@ -180,52 +187,84 @@ class TestSharedMemoryBucket(TestCase, SharedManagerMixin):
     def test_regression_infinite_cycle_on_unentered_open_write_context(self):
         self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()
 
+    def test_is_picklable(self):
+        shared_bucket = SharedMemoryBucket(manager=self.get_shared_manager())
 
-class TestMemoryBucketPickle(TestCase, SharedManagerMixin):
-    def test_normal_memory_bucket_is_not_picklable(self):
-        bucket = MemoryBucket()
-        with self.assertRaises(TypeError) as cm:
-            pickle.dumps(bucket)
-        self.assertIn("RLock", str(cm.exception))
-
-    def test_shared_memory_bucket_is_picklable(self):
-        bucket = MemoryBucket.create_shared(manager=self.get_shared_manager())
-
-        bucket.put_object("shared.txt", b"shared data")
-        pickled_data = pickle.dumps(bucket)
+        shared_bucket.put_object("shared.txt", b"shared data")
+        pickled_data = pickle.dumps(shared_bucket)
         unpickled_bucket: MemoryBucket = pickle.loads(pickled_data)
         self.assertEqual(unpickled_bucket.get_object("shared.txt"), b"shared data")
 
     def test_unpickle_after_manager_shutdown_raises_error(self):
-        bucket = MemoryBucket.create_shared()
-        bucket.put_object("abc", b"123")
-        pickled_data = pickle.dumps(bucket)
+        shared_bucket = SharedMemoryBucket()
+        shared_bucket.put_object("abc", b"123")
+        pickled_data = pickle.dumps(shared_bucket)
 
-        bucket._manager.shutdown()
+        shared_bucket._manager.shutdown()
 
         with self.assertRaises((EOFError, ConnectionError, BrokenPipeError, FileNotFoundError, Exception)):
-            unpickled_bucket: MemoryBucket = pickle.loads(pickled_data)
+            unpickled_bucket: SharedMemoryBucket = pickle.loads(pickled_data)
             unpickled_bucket.get_object("abc")
 
 
-class TestSharedMemoryBucketMultiprocessingCorrectness(TestCase, SharedManagerMixin):
+class TestSharedMemoryBucketMultiprocessingCorrectness(TestCase, _SharedManagerMixin):
     """Functional correctness tests for MemoryBucket with multiple processes."""
 
     @classmethod
     def tearDownClass(cls):
         cls.shutdown_shared_manager()
 
+    def test_create_without_manager_parameter(self):
+        """Verify that instantiation without manager parameter works."""
+        bucket_factory = SharedMemoryBucket()
+        bucket_factory.put_object("factory.txt", b"ok")
+        self.assertEqual(bucket_factory.get_object("factory.txt"), b"ok")
+
+    def test_multiprocess_put_object(self):
+        bucket = self._helper_run_multiprocess_orchestration(self._worker_put_object)
+
+        self.assertEqual(len(bucket.list_objects()), 3)
+        for i in range(3):
+            self.assertEqual(bucket.get_object(f"obj_{i}.txt"), f"content_{i}".encode())
+
+    def test_multiprocess_open_write(self):
+        bucket = self._helper_run_multiprocess_orchestration(self._worker_open_write)
+
+        self.assertEqual(len(bucket.list_objects()), 3)
+        for i in range(3):
+            self.assertEqual(bucket.get_object(f"stream_{i}.txt"), f"streamed_content_{i}".encode())
+
+    def test_concurrent_shared_lock_behavior(self):
+        """Verify that multiple processes can coordinate via the shared bucket lock."""
+        key = "counter"
+        num_procs = 4
+        iters = 50
+        bucket = self._helper_run_multiprocess_orchestration(self._worker_increment, num_processes=num_procs, args=(key, iters))
+
+        final_val = int(bucket.get_object(key).decode())
+        self.assertEqual(final_val, num_procs * iters)
+
     @staticmethod
-    def worker_put_object(bucket, index):
+    def _worker_increment(bucket, key, iters=50):
+        for _ in range(iters):
+            with bucket._lock:  # Using the shared lock from the manager
+                try:
+                    current = int(bucket.get_object(key).decode())
+                except FileNotFoundError:
+                    current = 0
+                bucket.put_object(key, str(current + 1).encode())
+
+    @staticmethod
+    def _worker_put_object(bucket, index):
         bucket.put_object(f"obj_{index}.txt", f"content_{index}".encode())
 
     @staticmethod
-    def worker_open_write(bucket, index):
+    def _worker_open_write(bucket, index):
         with bucket.open_write(f"stream_{index}.txt") as writer:
             writer.write(f"streamed_content_{index}".encode())
 
     def _helper_run_multiprocess_orchestration(self, worker_target, num_processes=3, args=None):
-        bucket = MemoryBucket.create_shared(manager=self.get_shared_manager())
+        bucket = SharedMemoryBucket(manager=self.get_shared_manager())
         ctx = self.get_multiprocessing_context()
         processes = []
         for i in range(num_processes):
@@ -238,43 +277,3 @@ class TestSharedMemoryBucketMultiprocessingCorrectness(TestCase, SharedManagerMi
         for p in processes:
             p.join()
         return bucket
-
-    def test_create_shared_without_manager_parameter(self):
-        """Verify that create_shared() without manager parameter works."""
-        bucket_factory = MemoryBucket.create_shared()
-        bucket_factory.put_object("factory.txt", b"ok")
-        self.assertEqual(bucket_factory.get_object("factory.txt"), b"ok")
-
-    def test_multiprocess_put_object(self):
-        bucket = self._helper_run_multiprocess_orchestration(self.worker_put_object)
-
-        self.assertEqual(len(bucket.list_objects()), 3)
-        for i in range(3):
-            self.assertEqual(bucket.get_object(f"obj_{i}.txt"), f"content_{i}".encode())
-
-    def test_multiprocess_open_write(self):
-        bucket = self._helper_run_multiprocess_orchestration(self.worker_open_write)
-
-        self.assertEqual(len(bucket.list_objects()), 3)
-        for i in range(3):
-            self.assertEqual(bucket.get_object(f"stream_{i}.txt"), f"streamed_content_{i}".encode())
-
-    @staticmethod
-    def worker_increment(bucket, key, iters=50):
-        for _ in range(iters):
-            with bucket._lock:  # Using the shared lock from the manager
-                try:
-                    current = int(bucket.get_object(key).decode())
-                except FileNotFoundError:
-                    current = 0
-                bucket.put_object(key, str(current + 1).encode())
-
-    def test_concurrent_shared_lock_behavior(self):
-        """Verify that multiple processes can coordinate via the shared bucket lock."""
-        key = "counter"
-        num_procs = 4
-        iters = 50
-        bucket = self._helper_run_multiprocess_orchestration(self.worker_increment, num_processes=num_procs, args=(key, iters))
-
-        final_val = int(bucket.get_object(key).decode())
-        self.assertEqual(final_val, num_procs * iters)
