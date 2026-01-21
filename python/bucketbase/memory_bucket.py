@@ -1,8 +1,11 @@
 import io
+import multiprocessing
+import weakref
 from contextlib import contextmanager
+from multiprocessing.managers import DictProxy, SyncManager
 from pathlib import PurePosixPath
 from threading import RLock
-from typing import BinaryIO, Generator, Iterable, Union
+from typing import Any, BinaryIO, Generator, Iterable, Optional, Union
 
 from streamerate import slist, sset
 from streamerate import stream as sstream
@@ -26,8 +29,8 @@ class MemoryBucket(IBucket):
     """
 
     def __init__(self) -> None:
-        self._objects: dict[str, bytes] = {}
-        self._lock = RLock()
+        self._objects: dict[str, bytes] | DictProxy[str, bytes] = {}
+        self._lock: Any = RLock()
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         _name = self._validate_name(name)
@@ -138,3 +141,50 @@ class MemoryBucket(IBucket):
             if not exception_occurred:
                 with self._lock:
                     self._objects[_name] = content
+
+
+class SharedMemoryBucket(MemoryBucket):
+    """
+    MemoryBucket shared across processes via a multiprocessing Manager.
+
+    CRITICAL: Data persists ONLY as long as the Manager process is running.
+    Accessing or unpickling the bucket after Manager shutdown will raise errors.
+
+    If 'manager' is None, a new one is created and shut down automatically via
+    weakref finalizer when the bucket is garbage collected. Otherwise, the caller
+    is responsible for the manager's lifecycle.
+    """
+
+    def __init__(self, manager: Optional[SyncManager] = None) -> None:
+        super().__init__()
+        if manager is None:
+            ctx = multiprocessing.get_context("spawn")
+            manager = ctx.Manager()
+            owns_manager = True
+            weakref.finalize(self, self._safe_manager_shutdown, manager)
+        else:
+            owns_manager = False
+
+        self._manager: SyncManager | None = manager
+        self._owns_manager: bool = owns_manager
+
+        # override parent's structures with managed ones. This is a small hack, but it's simple & clear enough
+        self._objects: dict[str, bytes] | DictProxy[str, bytes] = manager.dict()
+        self._lock: Any = manager.RLock()
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Customize pickling to avoid serializing the manager itself."""
+        state = self.__dict__.copy()
+        state["_manager"] = None
+        state["_owns_manager"] = False
+        return state
+
+    @staticmethod
+    def _safe_manager_shutdown(manager: Any) -> None:
+        """Helper to safely shut down a SyncManager during GC."""
+        try:
+            shutdown = getattr(manager, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass

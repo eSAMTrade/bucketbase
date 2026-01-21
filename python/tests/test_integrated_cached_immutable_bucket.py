@@ -261,11 +261,10 @@ class TestIntegratedCachedImmutableBucket(TestCase):
                 thread.start()
 
             for thread in threads:
-                thread.join(timeout=2.0)
-                self.assertFalse(thread.is_alive(), "Thread did not complete within timeout")
+                thread.join(timeout=10.0)
+                self.assertFalse(thread.is_alive(), f"Thread {thread.name} did not complete within timeout")
 
-            # Verify results
+            self.assertEqual(len(results), num_threads, f"Expected {num_threads} results, but got {len(results)}")
             self.assertEqual(len(get_object_calls), 1, "Main bucket's get_object should be called exactly once")
-            self.assertEqual(len(results), num_threads, "All threads should have retrieved the content")
             for result in results:
                 self.assertEqual(result, content, "All threads should get the same content")

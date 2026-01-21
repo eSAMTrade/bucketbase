@@ -14,7 +14,9 @@ class TestIntegratedMinioBucket(TestCase):
         self.assertIsNotNone(CONFIG.MINIO_PUBLIC_SERVER, "MINIO_PUBLIC_SERVER not set")
         self.assertIsNotNone(CONFIG.MINIO_ACCESS_KEY, "MINIO_ACCESS_KEY not set")
         self.assertIsNotNone(CONFIG.MINIO_SECRET_KEY, "MINIO_SECRET_KEY not set")
-        self.minio_client = build_minio_client(endpoints=CONFIG.MINIO_PUBLIC_SERVER, access_key=CONFIG.MINIO_ACCESS_KEY, secret_key=CONFIG.MINIO_SECRET_KEY)
+        self.minio_client = build_minio_client(
+            endpoints=CONFIG.MINIO_PUBLIC_SERVER, access_key=CONFIG.MINIO_ACCESS_KEY, secret_key=CONFIG.MINIO_SECRET_KEY, timeout=30
+        )
         self.bucket = MinioBucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET, minio_client=self.minio_client)
         if not self.minio_client.bucket_exists(CONFIG.MINIO_DEV_TESTS_BUCKET):
             self.minio_client.make_bucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET)
