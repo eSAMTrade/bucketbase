@@ -1,13 +1,16 @@
 import io
+import uuid
 from pathlib import PurePosixPath
 from typing import Iterable, Iterator
 from unittest import TestCase
 from unittest.mock import patch
 
+from minio.commonconfig import ENABLED
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
 from minio.error import S3Error
 from minio.helpers import MAX_PART_SIZE, MIN_PART_SIZE
+from minio.versioningconfig import VersioningConfig
 from urllib3 import HTTPResponse
 
 from bucketbase.ibucket import ObjectVersion
@@ -232,3 +235,96 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_regression_infinite_cycle_on_unentered_open_write_context(self):
         self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()
+
+
+class TestIntegratedMinioBucketVersioning(TestCase):
+    def setUp(self) -> None:
+        self.assertIsNotNone(CONFIG.MINIO_PUBLIC_SERVER, "MINIO_PUBLIC_SERVER not set")
+        self.assertIsNotNone(CONFIG.MINIO_ACCESS_KEY, "MINIO_ACCESS_KEY not set")
+        self.assertIsNotNone(CONFIG.MINIO_SECRET_KEY, "MINIO_SECRET_KEY not set")
+        self.minio_client = build_minio_client(
+            endpoints=CONFIG.MINIO_PUBLIC_SERVER, access_key=CONFIG.MINIO_ACCESS_KEY, secret_key=CONFIG.MINIO_SECRET_KEY, timeout=30
+        )
+        self.bucket_name = self._make_locked_bucket_name()
+        self.minio_client.make_bucket(bucket_name=self.bucket_name, object_lock=True)
+        self.bucket = MinioBucket(bucket_name=self.bucket_name, minio_client=self.minio_client)
+        self._ensure_bucket_versioning_enabled()
+        self.tester = IBucketTester(self.bucket, self)
+
+    def tearDown(self) -> None:
+        self._remove_all_bucket_versions()
+        self.minio_client.remove_bucket(self.bucket_name)
+
+    @staticmethod
+    def _make_locked_bucket_name() -> str:
+        suffix = f"-versioning-{uuid.uuid4().hex[:12]}"
+        prefix = CONFIG.MINIO_DEV_TESTS_BUCKET[: 63 - len(suffix)].rstrip(".-")
+        return f"{prefix or 'bucketbase'}{suffix}"
+
+    def _remove_all_bucket_versions(self) -> None:
+        objects = list(self.minio_client.list_objects(self.bucket_name, recursive=True, include_version=True))
+        if not objects:
+            return
+
+        delete_objects = [DeleteObject(MinioBucket._get_object_name(obj), obj.version_id) for obj in objects]
+        errors = list(self.minio_client.remove_objects(self.bucket_name, delete_objects))
+        self.assertEqual([], errors)
+
+    def _ensure_bucket_versioning_enabled(self) -> None:
+        versioning_config = self.minio_client.get_bucket_versioning(self.bucket_name)
+        if versioning_config.status != ENABLED:
+            self.minio_client.set_bucket_versioning(self.bucket_name, VersioningConfig(ENABLED))
+
+    @staticmethod
+    def _require_version_id(version_id: str | None) -> str:
+        if version_id is None:
+            raise AssertionError("Expected Minio version id to be set")
+        return version_id
+
+    def _put_two_object_versions(self, path: PurePosixPath) -> tuple[str, str]:
+        self.bucket.put_object(path, b"old content")
+        self.bucket.put_object(path, b"new content")
+
+        versions = list(self.bucket.list_object_versions(path))
+        latest_versions = [version for version in versions if version.is_latest and not version.is_delete_marker]
+        old_versions = [version for version in versions if not version.is_latest and not version.is_delete_marker]
+
+        self.assertEqual(2, len(versions))
+        self.assertEqual(1, len(latest_versions))
+        self.assertEqual(1, len(old_versions))
+        return self._require_version_id(old_versions[0].version_id), self._require_version_id(latest_versions[0].version_id)
+
+    def test_list_object_versions(self) -> None:
+        path = PurePosixPath(f"dir{self.tester.us}/integrated-version-list.txt")
+
+        old_version_id, latest_version_id = self._put_two_object_versions(path)
+        versions = list(self.bucket.list_object_versions(path))
+
+        self.assertEqual(2, len(versions))
+        self.assertEqual({old_version_id, latest_version_id}, {version.version_id for version in versions})
+        self.assertTrue(all(version.name == path for version in versions))
+        self.assertEqual(1, len([version for version in versions if version.is_latest]))
+        self.assertFalse(any(version.is_delete_marker for version in versions))
+
+    def test_get_object_version(self) -> None:
+        path = PurePosixPath(f"dir{self.tester.us}/integrated-version-read.txt")
+
+        old_version_id, latest_version_id = self._put_two_object_versions(path)
+
+        self.assertEqual(b"new content", self.bucket.get_object(path))
+        self.assertEqual(b"old content", self.bucket.get_object_version(path, old_version_id))
+        self.assertEqual(b"new content", self.bucket.get_object_version(path, latest_version_id))
+
+    def test_remove_object_all_versions(self) -> None:
+        path = PurePosixPath(f"dir{self.tester.us}/integrated-version-delete.txt")
+
+        self._put_two_object_versions(path)
+        self.bucket.remove_objects([path])
+        versions_before_delete = list(self.bucket.list_object_versions(path))
+
+        errors = self.bucket.remove_object_all_versions(path)
+
+        self.assertEqual([], list(errors))
+        self.assertTrue(any(version.is_delete_marker for version in versions_before_delete))
+        self.assertFalse(self.bucket.exists(path))
+        self.assertEqual([], list(self.bucket.list_object_versions(path)))
