@@ -34,6 +34,18 @@ class ShallowListing:
     prefixes: slist[str]
 
 
+@dataclass(frozen=True)
+class ObjectVersion:
+    """
+    Object version metadata returned by version-aware bucket implementations.
+    """
+
+    name: PurePosixPath
+    version_id: str | None
+    is_latest: bool
+    is_delete_marker: bool = False
+
+
 class ObjectStream(AbstractContextManager[BinaryIO]):
     def __init__(self, stream: BinaryIO, name: PurePosixPath) -> None:
         self._stream = stream
@@ -348,6 +360,31 @@ class IBucket(PydanticStrictValidated, ABC):
         This does not return an error when a specified file doesn't exist in the bucket
         It's by design and is consistent with the behavior of similar APIs in Amazon S3.
         This design choice is made for a few reasons: Idempotency, Simplification of Client Logic, Security and Privacy, etc..
+        """
+        raise NotImplementedError()
+
+    def list_object_versions(self, name: PurePosixPath | str) -> slist[ObjectVersion]:
+        """
+        Lists versions for a single object name.
+        """
+        raise NotImplementedError()
+
+    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
+        """
+        Retrieves a specific object version. A None version_id means the current object version.
+        """
+        with self.get_object_version_stream(name, version_id) as response:
+            return response.read()
+
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+        """
+        Retrieves a stream for a specific object version. A None version_id means the current object version.
+        """
+        raise NotImplementedError()
+
+    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+        """
+        Deletes every listed version of a single object name, including delete markers when supported.
         """
         raise NotImplementedError()
 

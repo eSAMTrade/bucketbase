@@ -92,6 +92,12 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
     def cleanup(self) -> None:
         self.storage.remove_prefix(f"dir{self.us}")
 
+    @staticmethod
+    def _require_version_id(version_id: str | None) -> str:
+        if version_id is None:
+            raise AssertionError("Expected bucket version id to be set")
+        return version_id
+
     def test_put_and_get_object(self) -> None:
         unique_dir = f"dir{self.us}"
         # binary content
@@ -258,6 +264,93 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         # inexistent path
         path = f"{unique_dir}/inexistent.txt"
         self.test_case.assertRaises(FileNotFoundError, self.storage.get_object_stream, path)
+
+    def test_list_and_read_object_versions_after_overwrite(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/versioned.txt")
+        self.storage.put_object(path, b"old content")
+        self.storage.put_object(path, b"new content")
+
+        versions = self.storage.list_object_versions(path)
+        old_version_id = self._require_version_id(versions[1].version_id)
+
+        self.test_case.assertIsInstance(versions, slist)
+        self.test_case.assertEqual(2, len(versions))
+        self.test_case.assertTrue(versions[0].is_latest)
+        self.test_case.assertFalse(versions[1].is_latest)
+        self.test_case.assertEqual(b"new content", self.storage.get_object_version(path, None))
+        self.test_case.assertEqual(b"old content", self.storage.get_object_version(path, old_version_id))
+
+    def test_get_object_version_stream_reads_old_version(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/versioned-stream.txt")
+        self.storage.put_object(path, b"old content")
+        old_version_id = self._require_version_id(self.storage.list_object_versions(path)[0].version_id)
+        self.storage.put_object(path, b"new content")
+
+        with self.storage.get_object_version_stream(path, old_version_id) as stream:
+            content = stream.read()
+
+        self.test_case.assertEqual(b"old content", content)
+
+    def test_remove_objects_adds_delete_marker_without_losing_old_versions(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/deleted-versioned.txt")
+        self.storage.put_object(path, b"old content")
+        old_version_id = self._require_version_id(self.storage.list_object_versions(path)[0].version_id)
+
+        errors = self.storage.remove_objects([path])
+        versions = self.storage.list_object_versions(path)
+
+        self.test_case.assertEqual([], list(errors))
+        self.test_case.assertFalse(self.storage.exists(path))
+        self.test_case.assertTrue(versions[0].is_latest)
+        self.test_case.assertTrue(versions[0].is_delete_marker)
+        self.test_case.assertFalse(versions[1].is_latest)
+        self.test_case.assertEqual(b"old content", self.storage.get_object_version(path, old_version_id))
+        with self.test_case.assertRaises(FileNotFoundError):
+            self.storage.get_object(path)
+        with self.test_case.assertRaises(FileNotFoundError):
+            self.storage.get_object_version(path, versions[0].version_id)
+
+    def test_remove_object_all_versions_clears_current_object_and_history(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/all-versions-deleted.txt")
+        self.storage.put_object(path, b"old content")
+        old_version_id = self._require_version_id(self.storage.list_object_versions(path)[0].version_id)
+        self.storage.put_object(path, b"new content")
+
+        errors = self.storage.remove_object_all_versions(path)
+
+        self.test_case.assertEqual([], list(errors))
+        self.test_case.assertFalse(self.storage.exists(path))
+        self.test_case.assertEqual([], list(self.storage.list_object_versions(path)))
+        with self.test_case.assertRaises(FileNotFoundError):
+            self.storage.get_object_version(path, old_version_id)
+
+    def test_open_write_sync_creates_readable_version(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/open-write-sync-versioned.txt")
+        with self.storage.open_write_sync(path) as writer:
+            writer.write(b"streamed content")
+
+        version_id = self._require_version_id(self.storage.list_object_versions(path)[0].version_id)
+
+        self.test_case.assertEqual(b"streamed content", self.storage.get_object_version(path, version_id))
+
+    def test_remove_objects_for_missing_name_does_not_create_version_history(self) -> None:
+        unique_dir = f"dir{self.us}"
+        path = PurePosixPath(f"{unique_dir}/missing-versioned.txt")
+
+        errors = self.storage.remove_objects([path])
+
+        self.test_case.assertEqual([], list(errors))
+        self.test_case.assertEqual([], list(self.storage.list_object_versions(path)))
+
+    def test_invalid_names_raise_for_version_methods(self) -> None:
+        self.test_case.assertRaises(ValueError, self.storage.list_object_versions, "/")
+        self.test_case.assertRaises(ValueError, self.storage.get_object_version, "/", "v1")
+        self.test_case.assertRaises(ValueError, self.storage.remove_object_all_versions, "/")
 
     def test_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"

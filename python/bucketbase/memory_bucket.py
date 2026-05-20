@@ -1,5 +1,6 @@
 import io
 import multiprocessing
+import uuid
 import weakref
 from contextlib import contextmanager
 from multiprocessing.managers import DictProxy, SyncManager
@@ -11,7 +12,10 @@ from streamerate import slist, sset
 from streamerate import stream as sstream
 
 from bucketbase import DeleteError
-from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
+from bucketbase.ibucket import IBucket, ObjectStream, ObjectVersion, ShallowListing
+
+
+MemoryObjectVersion = tuple[str, bytes | None, bool]
 
 
 class _NonClosingBytesIO(io.BytesIO):
@@ -30,7 +34,13 @@ class MemoryBucket(IBucket):
 
     def __init__(self) -> None:
         self._objects: dict[str, bytes] | DictProxy[str, bytes] = {}
+        self._object_versions: dict[str, list[MemoryObjectVersion]] | DictProxy[str, list[MemoryObjectVersion]] = {}
         self._lock: Any = RLock()
+
+    def _store_object_version(self, name: str, content: bytes | None, is_delete_marker: bool) -> None:
+        versions = list(self._object_versions.get(name, []))
+        versions.append((uuid.uuid4().hex, content, is_delete_marker))
+        self._object_versions[name] = versions
 
     def put_object(self, name: PurePosixPath | str, content: Union[str, bytes, bytearray]) -> None:
         _name = self._validate_name(name)
@@ -38,6 +48,7 @@ class MemoryBucket(IBucket):
         _content = self._encode_content(content)
         with self._lock:
             self._objects[_name] = _content
+            self._store_object_version(_name, _content, is_delete_marker=False)
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         _content = stream.read()
@@ -53,6 +64,23 @@ class MemoryBucket(IBucket):
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         content = self.get_object(name)
+        return ObjectStream(io.BytesIO(content), PurePosixPath(name))
+
+    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
+        if version_id is None:
+            return self.get_object(name)
+
+        _name = self._validate_name(name)
+        with self._lock:
+            for stored_version_id, content, is_delete_marker in self._object_versions.get(_name, []):
+                if stored_version_id == version_id:
+                    if is_delete_marker or content is None:
+                        raise FileNotFoundError(f"Object {_name} version {version_id} is a delete marker in MemoryObjectStore")
+                    return content
+        raise FileNotFoundError(f"Object {_name} version {version_id} not found in MemoryObjectStore")
+
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+        content = self.get_object_version(name, version_id)
         return ObjectStream(io.BytesIO(content), PurePosixPath(name))
 
     def list_objects(self, prefix: PurePosixPath | str = "") -> slist[PurePosixPath]:
@@ -79,6 +107,22 @@ class MemoryBucket(IBucket):
                     prefixes.add(common_prefix)
         return ShallowListing(objects=objects, prefixes=prefixes.to_list())
 
+    def list_object_versions(self, name: PurePosixPath | str) -> slist[ObjectVersion]:
+        _name = self._validate_name(name)
+        with self._lock:
+            versions = list(self._object_versions.get(_name, []))
+
+        latest_index = len(versions) - 1
+        return slist(
+            ObjectVersion(
+                name=PurePosixPath(_name),
+                version_id=version_id,
+                is_latest=index == latest_index,
+                is_delete_marker=is_delete_marker,
+            )
+            for index, (version_id, _content, is_delete_marker) in reversed(list(enumerate(versions)))
+        )
+
     def exists(self, name: PurePosixPath | str) -> bool:
         _name = self._validate_name(name)
         with self._lock:
@@ -93,7 +137,15 @@ class MemoryBucket(IBucket):
                 obj = self._validate_name(obj)
                 if obj in self._objects:
                     self._objects.pop(obj)
+                    self._store_object_version(obj, content=None, is_delete_marker=True)
         return delete_errors
+
+    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+        _name = self._validate_name(name)
+        with self._lock:
+            self._objects.pop(_name, None)
+            self._object_versions.pop(_name, None)
+        return slist()
 
     def get_size(self, name: PurePosixPath | str) -> int:
         _name = self._validate_name(name)
@@ -141,6 +193,7 @@ class MemoryBucket(IBucket):
             if not exception_occurred:
                 with self._lock:
                     self._objects[_name] = content
+                    self._store_object_version(_name, content, is_delete_marker=False)
 
 
 class SharedMemoryBucket(MemoryBucket):
@@ -170,6 +223,7 @@ class SharedMemoryBucket(MemoryBucket):
 
         # override parent's structures with managed ones. This is a small hack, but it's simple & clear enough
         self._objects: dict[str, bytes] | DictProxy[str, bytes] = manager.dict()
+        self._object_versions: dict[str, list[MemoryObjectVersion]] | DictProxy[str, list[MemoryObjectVersion]] = manager.dict()
         self._lock: Any = manager.RLock()
 
     def __getstate__(self) -> dict[str, Any]:

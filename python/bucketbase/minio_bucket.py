@@ -18,7 +18,7 @@ from streamerate import slist
 from streamerate import stream as sstream
 from urllib3 import BaseHTTPResponse
 
-from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
+from bucketbase.ibucket import IBucket, ObjectStream, ObjectVersion, ShallowListing
 
 
 class MinioObjectStream(ObjectStream):
@@ -125,18 +125,38 @@ class MinioBucket(IBucket):
 
     @classmethod
     def _get_object_name(cls, obj: Object) -> str:
-        return obj.name if cls._USES_NAME_ATTRIBUTE else obj.object_name
+        object_name = obj.name if cls._USES_NAME_ATTRIBUTE else obj.object_name
+        if object_name is None:
+            raise ValueError("Minio object listing item has no object name")
+        return object_name
+
+    @staticmethod
+    def _read_response(response: BaseHTTPResponse) -> bytes:
+        try:
+            data = bytes()
+            for buffer in response.stream(amt=1024 * 1024):
+                data += buffer
+            return data
+        finally:
+            response.release_conn()
+
+    @staticmethod
+    def _to_bool(value: object) -> bool:
+        return value if isinstance(value, bool) else str(value).lower() == "true"
+
+    @classmethod
+    def _to_object_version(cls, obj: Object) -> ObjectVersion:
+        return ObjectVersion(
+            name=PurePosixPath(cls._get_object_name(obj)),
+            version_id=obj.version_id,
+            is_latest=cls._to_bool(obj.is_latest),
+            is_delete_marker=obj.is_delete_marker,
+        )
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         with self.get_object_stream(name) as response:
             assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
-            try:
-                data = bytes()
-                for buffer in response.stream(amt=1024 * 1024):
-                    data += buffer
-                return data
-            finally:
-                response.release_conn()
+            return self._read_response(response)
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         _name = self._validate_name(name)
@@ -149,6 +169,21 @@ class MinioBucket(IBucket):
 
         _name_path = PurePosixPath(_name) if isinstance(_name, str) else _name
         return MinioObjectStream(response, _name_path)
+
+    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
+        with self.get_object_version_stream(name, version_id) as response:
+            assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
+            return self._read_response(response)
+
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+        _name = self._validate_name(name)
+        try:
+            response: BaseHTTPResponse = self._minio_client.get_object(self._bucket_name, _name, version_id=version_id)
+        except minio.error.S3Error as e:
+            if e.code in ("MethodNotAllowed", "NoSuchKey", "NoSuchVersion"):
+                raise FileNotFoundError(f"Object {_name} version {version_id} not found in bucket {self._bucket_name} on Minio") from e
+            raise
+        return MinioObjectStream(response, PurePosixPath(_name))
 
     def fget_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         """
@@ -198,6 +233,11 @@ class MinioBucket(IBucket):
         objects = object_names.filter(lambda x: not x.endswith("/")).map(PurePosixPath).to_list()
         return ShallowListing(objects=objects, prefixes=prefixes)
 
+    def list_object_versions(self, name: PurePosixPath | str) -> slist[ObjectVersion]:
+        _name = self._validate_name(name)
+        listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_name, recursive=True, include_version=True)
+        return sstream(listing_itr).filter(lambda obj: self._get_object_name(obj) == _name).map(self._to_object_version).to_list()
+
     def exists(self, name: PurePosixPath | str) -> bool:
         _name = self._validate_name(name)
         try:
@@ -215,6 +255,14 @@ class MinioBucket(IBucket):
         # the return value is a generator and if will not be converted to a list the deletion won't happen
         errors = slist(self._minio_client.remove_objects(self._bucket_name, delete_objects_stream))
         return errors
+
+    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+        versions = self.list_object_versions(name)
+        if versions.size() == 0:
+            return slist()
+
+        delete_objects_stream = versions.map(lambda version: DeleteObject(str(version.name), version.version_id))
+        return slist(self._minio_client.remove_objects(self._bucket_name, delete_objects_stream))
 
     def get_size(self, name: PurePosixPath | str) -> int:
         try:

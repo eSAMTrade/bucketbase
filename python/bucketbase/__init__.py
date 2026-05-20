@@ -4,7 +4,7 @@
 """
 beware of the order of imports, as some of the imports are circular, like fs_bucket due to (named_lock_manager)
 """
-from bucketbase.ibucket import S3_NAME_CHARS_NO_SEP, IBucket, ShallowListing
+from bucketbase.ibucket import S3_NAME_CHARS_NO_SEP, IBucket, ObjectVersion, ShallowListing
 from bucketbase.errors import DeleteError
 
 from bucketbase.cached_immutable_bucket import CachedImmutableBucket
