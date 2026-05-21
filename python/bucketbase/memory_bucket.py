@@ -38,7 +38,7 @@ class MemoryBucket(IBucket):
         self._lock: Any = RLock()
 
     def _store_object_version(self, name: str, content: bytes | None, is_delete_marker: bool) -> None:
-        versions = list(self._object_versions.get(name, []))
+        versions = self._object_versions.get(name, [])
         versions.append((uuid.uuid4().hex, content, is_delete_marker))
         self._object_versions[name] = versions
 
@@ -107,18 +107,17 @@ class MemoryBucket(IBucket):
     def list_object_versions(self, name: PurePosixPath | str) -> slist[ObjectVersion]:
         _name = self._validate_name(name)
         with self._lock:
-            versions = list(self._object_versions.get(_name, []))
-
-        latest_index = len(versions) - 1
-        return slist(
-            ObjectVersion(
-                name=PurePosixPath(_name),
-                version_id=version_id,
-                is_latest=index == latest_index,
-                is_delete_marker=is_delete_marker,
+            versions = self._object_versions.get(_name, [])
+            latest_index = len(versions) - 1
+            return slist(
+                ObjectVersion(
+                    name=PurePosixPath(_name),
+                    version_id=version_id,
+                    is_latest=index == latest_index,
+                    is_delete_marker=is_delete_marker,
+                )
+                for index, (version_id, _content, is_delete_marker) in reversed(list(enumerate(versions)))
             )
-            for index, (version_id, _content, is_delete_marker) in reversed(list(enumerate(versions)))
-        )
 
     def exists(self, name: PurePosixPath | str) -> bool:
         _name = self._validate_name(name)
