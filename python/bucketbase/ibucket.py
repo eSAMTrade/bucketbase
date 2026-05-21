@@ -382,7 +382,7 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+    def remove_object_with_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
         """
         Deletes every listed version of a single object name, including delete markers when supported.
         """

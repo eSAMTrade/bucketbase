@@ -29,7 +29,7 @@ class TestMemoryBucket(TestCase):
         self.tester.test_remove_objects_adds_delete_marker_without_losing_old_versions()
 
     def test_remove_object_all_versions_clears_current_object_and_history(self):
-        self.tester.test_remove_object_all_versions_clears_current_object_and_history()
+        self.tester.test_remove_object_with_versions_clears_current_object_and_history()
 
     def test_open_write_sync_creates_readable_version(self):
         self.tester.test_open_write_sync_creates_readable_version()
@@ -161,7 +161,7 @@ class TestSharedMemoryBucket(TestCase, _SharedManagerMixin):
         self.tester.test_remove_objects_adds_delete_marker_without_losing_old_versions()
 
     def test_remove_object_all_versions_clears_current_object_and_history(self):
-        self.tester.test_remove_object_all_versions_clears_current_object_and_history()
+        self.tester.test_remove_object_with_versions_clears_current_object_and_history()
 
     def test_open_write_sync_creates_readable_version(self):
         self.tester.test_open_write_sync_creates_readable_version()

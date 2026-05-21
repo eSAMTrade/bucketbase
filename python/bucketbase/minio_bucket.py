@@ -260,7 +260,7 @@ class MinioBucket(IBucket):
         errors = slist(self._minio_client.remove_objects(self._bucket_name, delete_objects_stream))
         return errors
 
-    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+    def remove_object_with_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
         versions = self.list_object_versions(name)
         if versions.size() == 0:
             return slist()

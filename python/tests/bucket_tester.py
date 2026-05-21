@@ -307,14 +307,14 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         with self.test_case.assertRaises(FileNotFoundError):
             self.storage.get_object_version(path, versions[0].version_id)
 
-    def test_remove_object_all_versions_clears_current_object_and_history(self) -> None:
+    def test_remove_object_with_versions_clears_current_object_and_history(self) -> None:
         unique_dir = f"dir{self.us}"
         path = PurePosixPath(f"{unique_dir}/all-versions-deleted.txt")
         self.storage.put_object(path, b"old content")
         old_version_id = self.storage.list_object_versions(path)[0].version_id
         self.storage.put_object(path, b"new content")
 
-        errors = self.storage.remove_object_all_versions(path)
+        errors = self.storage.remove_object_with_versions(path)
 
         self.test_case.assertEqual([], list(errors))
         self.test_case.assertFalse(self.storage.exists(path))
@@ -344,7 +344,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
     def test_invalid_names_raise_for_version_methods(self) -> None:
         self.test_case.assertRaises(ValueError, self.storage.list_object_versions, "/")
         self.test_case.assertRaises(ValueError, self.storage.get_object_version, "/", "v1")
-        self.test_case.assertRaises(ValueError, self.storage.remove_object_all_versions, "/")
+        self.test_case.assertRaises(ValueError, self.storage.remove_object_with_versions, "/")
 
     def test_list_objects(self) -> None:
         unique_dir = f"dir{self.us}"

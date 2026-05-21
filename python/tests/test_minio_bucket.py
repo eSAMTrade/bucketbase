@@ -120,7 +120,7 @@ class TestMinioBucketVersionMethods(TestCase):
             self._make_object("dir/file.txt", "v1", is_delete_marker=True),
         ]
 
-        errors = self.bucket.remove_object_all_versions("dir/file.txt")
+        errors = self.bucket.remove_object_with_versions("dir/file.txt")
 
         self.assertEqual([], list(errors))
         self.assertEqual("test-bucket", self.client.remove_objects_calls[0][0])
@@ -130,7 +130,7 @@ class TestMinioBucketVersionMethods(TestCase):
         )
 
     def test_remove_object_all_versions_without_versions_does_not_delete(self) -> None:
-        errors = self.bucket.remove_object_all_versions("dir/file.txt")
+        errors = self.bucket.remove_object_with_versions("dir/file.txt")
 
         self.assertEqual([], list(errors))
         self.assertEqual([], self.client.remove_objects_calls)
@@ -322,7 +322,7 @@ class TestIntegratedMinioBucketVersioning(TestCase):
         self.bucket.remove_objects([path])
         versions_before_delete = list(self.bucket.list_object_versions(path))
 
-        errors = self.bucket.remove_object_all_versions(path)
+        errors = self.bucket.remove_object_with_versions(path)
 
         self.assertEqual([], list(errors))
         self.assertTrue(any(version.is_delete_marker for version in versions_before_delete))

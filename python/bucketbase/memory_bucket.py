@@ -14,7 +14,6 @@ from streamerate import stream as sstream
 from bucketbase import DeleteError
 from bucketbase.ibucket import IBucket, ObjectStream, ObjectVersion, ShallowListing
 
-
 MemoryObjectVersion = tuple[str, bytes | None, bool]
 
 
@@ -136,7 +135,7 @@ class MemoryBucket(IBucket):
                     self._store_object_version(obj, content=None, is_delete_marker=True)
         return delete_errors
 
-    def remove_object_all_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
+    def remove_object_with_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
         _name = self._validate_name(name)
         with self._lock:
             self._objects.pop(_name, None)
