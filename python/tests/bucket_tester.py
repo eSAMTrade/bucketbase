@@ -278,7 +278,7 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertEqual(2, len(versions))
         self.test_case.assertTrue(versions[0].is_latest)
         self.test_case.assertFalse(versions[1].is_latest)
-        self.test_case.assertEqual(b"new content", self.storage.get_object_version(path, None))
+        self.test_case.assertEqual(b"new content", self.storage.get_object(path))
         self.test_case.assertEqual(b"old content", self.storage.get_object_version(path, old_version_id))
 
     def test_get_object_version_stream_reads_old_version(self) -> None:

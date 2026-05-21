@@ -66,10 +66,7 @@ class MemoryBucket(IBucket):
         content = self.get_object(name)
         return ObjectStream(io.BytesIO(content), PurePosixPath(name))
 
-    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
-        if version_id is None:
-            return self.get_object(name)
-
+    def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
         _name = self._validate_name(name)
         with self._lock:
             for stored_version_id, content, is_delete_marker in self._object_versions.get(_name, []):
@@ -79,7 +76,7 @@ class MemoryBucket(IBucket):
                     return content
         raise FileNotFoundError(f"Object {_name} version {version_id} not found in MemoryObjectStore")
 
-    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         content = self.get_object_version(name, version_id)
         return ObjectStream(io.BytesIO(content), PurePosixPath(name))
 

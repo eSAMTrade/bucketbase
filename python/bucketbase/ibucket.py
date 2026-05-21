@@ -369,16 +369,16 @@ class IBucket(PydanticStrictValidated, ABC):
         """
         raise NotImplementedError()
 
-    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
+    def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
         """
-        Retrieves a specific object version. A None version_id means the current object version.
+        Retrieves a specific object version. Use get_object() to retrieve the current object version.
         """
         with self.get_object_version_stream(name, version_id) as response:
             return response.read()
 
-    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         """
-        Retrieves a stream for a specific object version. A None version_id means the current object version.
+        Retrieves a stream for a specific object version. Use get_object_stream() to retrieve the current object version.
         """
         raise NotImplementedError()
 
