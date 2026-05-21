@@ -41,7 +41,7 @@ class ObjectVersion:
     """
 
     name: PurePosixPath
-    version_id: str | None
+    version_id: str
     is_latest: bool
     is_delete_marker: bool = False
 

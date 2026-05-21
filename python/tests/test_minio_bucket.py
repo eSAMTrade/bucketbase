@@ -88,6 +88,12 @@ class TestMinioBucketVersionMethods(TestCase):
             self.client.list_objects_calls[0],
         )
 
+    def test_list_object_versions_requires_version_id(self) -> None:
+        self.client.list_objects_response = [self._make_object("dir/file.txt", None)]
+
+        with self.assertRaisesRegex(ValueError, "has no version id"):
+            self.bucket.list_object_versions("dir/file.txt")
+
     def test_get_object_version_reads_specific_version(self) -> None:
         self.client.get_object_responses_by_version["v1"] = self._make_response(b"old content")
 
@@ -275,12 +281,6 @@ class TestIntegratedMinioBucketVersioning(TestCase):
         if versioning_config.status != ENABLED:
             self.minio_client.set_bucket_versioning(self.bucket_name, VersioningConfig(ENABLED))
 
-    @staticmethod
-    def _require_version_id(version_id: str | None) -> str:
-        if version_id is None:
-            raise AssertionError("Expected Minio version id to be set")
-        return version_id
-
     def _put_two_object_versions(self, path: PurePosixPath) -> tuple[str, str]:
         self.bucket.put_object(path, b"old content")
         self.bucket.put_object(path, b"new content")
@@ -292,7 +292,7 @@ class TestIntegratedMinioBucketVersioning(TestCase):
         self.assertEqual(2, len(versions))
         self.assertEqual(1, len(latest_versions))
         self.assertEqual(1, len(old_versions))
-        return self._require_version_id(old_versions[0].version_id), self._require_version_id(latest_versions[0].version_id)
+        return old_versions[0].version_id, latest_versions[0].version_id
 
     def test_list_object_versions(self) -> None:
         path = PurePosixPath(f"dir{self.tester.us}/integrated-version-list.txt")

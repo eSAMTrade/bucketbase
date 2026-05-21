@@ -146,9 +146,13 @@ class MinioBucket(IBucket):
 
     @classmethod
     def _to_object_version(cls, obj: Object) -> ObjectVersion:
+        object_name = cls._get_object_name(obj)
+        version_id = obj.version_id
+        if version_id is None:
+            raise ValueError(f"Minio object listing item {object_name} has no version id")
         return ObjectVersion(
-            name=PurePosixPath(cls._get_object_name(obj)),
-            version_id=obj.version_id,
+            name=PurePosixPath(object_name),
+            version_id=version_id,
             is_latest=cls._to_bool(obj.is_latest),
             is_delete_marker=obj.is_delete_marker,
         )
@@ -170,12 +174,12 @@ class MinioBucket(IBucket):
         _name_path = PurePosixPath(_name) if isinstance(_name, str) else _name
         return MinioObjectStream(response, _name_path)
 
-    def get_object_version(self, name: PurePosixPath | str, version_id: str | None) -> bytes:
+    def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
         with self.get_object_version_stream(name, version_id) as response:
             assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
             return self._read_response(response)
 
-    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str | None) -> ObjectStream:
+    def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         _name = self._validate_name(name)
         try:
             response: BaseHTTPResponse = self._minio_client.get_object(self._bucket_name, _name, version_id=version_id)
