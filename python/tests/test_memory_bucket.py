@@ -19,17 +19,8 @@ class TestMemoryBucket(TestCase):
     def test_put_and_get_object_stream(self):
         self.tester.test_put_and_get_object_stream()
 
-    def test_list_and_read_object_versions_after_overwrite(self):
-        self.tester.test_list_and_read_object_versions_after_overwrite()
-
-    def test_get_object_version_stream_reads_old_version(self):
-        self.tester.test_get_object_version_stream_reads_old_version()
-
-    def test_remove_objects_adds_delete_marker_without_losing_old_versions(self):
-        self.tester.test_remove_objects_adds_delete_marker_without_losing_old_versions()
-
-    def test_remove_object_all_versions_clears_current_object_and_history(self):
-        self.tester.test_remove_object_with_versions_clears_current_object_and_history()
+    def test_full_cycle_object_versions_after_overwrite(self):
+        self.tester.test_full_cycle_object_versions_after_overwrite()
 
     def test_open_write_sync_creates_readable_version(self):
         self.tester.test_open_write_sync_creates_readable_version()
@@ -151,17 +142,8 @@ class TestSharedMemoryBucket(TestCase, _SharedManagerMixin):
     def test_put_and_get_object_stream(self):
         self.tester.test_put_and_get_object_stream()
 
-    def test_list_and_read_object_versions_after_overwrite(self):
-        self.tester.test_list_and_read_object_versions_after_overwrite()
-
-    def test_get_object_version_stream_reads_old_version(self):
-        self.tester.test_get_object_version_stream_reads_old_version()
-
-    def test_remove_objects_adds_delete_marker_without_losing_old_versions(self):
-        self.tester.test_remove_objects_adds_delete_marker_without_losing_old_versions()
-
-    def test_remove_object_all_versions_clears_current_object_and_history(self):
-        self.tester.test_remove_object_with_versions_clears_current_object_and_history()
+    def test_full_cycle_object_versions_after_overwrite(self):
+        self.tester.test_full_cycle_object_versions_after_overwrite()
 
     def test_open_write_sync_creates_readable_version(self):
         self.tester.test_open_write_sync_creates_readable_version()

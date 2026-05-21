@@ -15,7 +15,7 @@ from urllib3 import HTTPResponse
 
 from bucketbase.ibucket import ObjectVersion
 from bucketbase.minio_bucket import MinioBucket, build_minio_client
-from tests.bucket_tester import IBucketTester
+from tests.bucket_tester import IBucketTester, VersionedIBucketTester
 from tests.config import CONFIG
 
 
@@ -147,7 +147,9 @@ class TestIntegratedMinioBucket(TestCase):
         self.bucket = MinioBucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET, minio_client=self.minio_client)
         if not self.minio_client.bucket_exists(CONFIG.MINIO_DEV_TESTS_BUCKET):
             self.minio_client.make_bucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET)
+        self.versioned_bucket = MinioBucket("versioned")
         self.tester = IBucketTester(self.bucket, self)
+        self.versioned_tester = IBucketTester(self.versioned_bucket, self)
 
     def tearDown(self) -> None:
         self.tester.cleanup()
@@ -243,6 +245,36 @@ class TestIntegratedMinioBucket(TestCase):
         self.tester.test_regression_infinite_cycle_on_unentered_open_write_context()
 
 
+class TestIntegratedVersionedMinioBucket(TestCase):
+    def setUp(self) -> None:
+        self.assertIsNotNone(CONFIG.MINIO_PUBLIC_SERVER, "MINIO_PUBLIC_SERVER not set")
+        self.assertIsNotNone(CONFIG.MINIO_ACCESS_KEY, "MINIO_ACCESS_KEY not set")
+        self.assertIsNotNone(CONFIG.MINIO_SECRET_KEY, "MINIO_SECRET_KEY not set")
+        self.minio_client = build_minio_client(
+            endpoints=CONFIG.MINIO_PUBLIC_SERVER, access_key=CONFIG.MINIO_ACCESS_KEY, secret_key=CONFIG.MINIO_SECRET_KEY, timeout=30
+        )
+        self.bucket = MinioBucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET, minio_client=self.minio_client)
+        if not self.minio_client.bucket_exists(CONFIG.MINIO_DEV_TESTS_BUCKET):
+            self.minio_client.make_bucket(bucket_name=CONFIG.MINIO_DEV_TESTS_BUCKET)
+        self.tester = VersionedIBucketTester(self.bucket, self)
+
+    def tearDown(self) -> None:
+        self.tester.cleanup()
+
+    def test_full_cycle_object_versions_after_overwrite(self):
+        self.tester.test_full_cycle_object_versions_after_overwrite()
+
+    def test_open_write_sync_creates_readable_version(self):
+        self.tester.test_open_write_sync_creates_readable_version()
+
+    def test_remove_objects_for_missing_name_does_not_create_version_history(self):
+        self.tester.test_remove_objects_for_missing_name_does_not_create_version_history()
+
+    def test_invalid_names_raise_for_version_methods(self):
+        self.tester.test_invalid_names_raise_for_version_methods()
+
+
+## @advlad this is gonna be removed
 class TestIntegratedMinioBucketVersioning(TestCase):
     def setUp(self) -> None:
         self.assertIsNotNone(CONFIG.MINIO_PUBLIC_SERVER, "MINIO_PUBLIC_SERVER not set")
