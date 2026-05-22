@@ -12,3 +12,4 @@ from bucketbase.file_lock import FileLockForPath
 from bucketbase.fs_bucket import AppendOnlyFSBucket, FSBucket
 from bucketbase.memory_bucket import MemoryBucket
 from bucketbase.minio_bucket import MinioBucket
+from bucketbase.versioned_minio_bucket import ObjectVersion, VersionedMinioBucket
