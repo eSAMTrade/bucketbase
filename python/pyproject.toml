@@ -1,36 +1,43 @@
-[tool.poetry]
+[project]
 name = "bucketbase"
 version = "1.6.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
-authors = ["Andrei Suiu <andrei.suiu@gmail.com>"]
-repository = "https://github.com/asuiu/bucketbase"
+authors = [{ name = "Andrei Suiu", email = "andrei.suiu@gmail.com" }]
 readme = "README.py.md"
 license = "MIT"
+requires-python = ">=3.10,<4.0.0"
+dependencies = [
+    "streamerate>=1.2.1,<1.2.7; python_version < '3.11'",
+    "streamerate>=1.2.1; python_version >= '3.11'",
+    "pyxtension>=1.17.1",
+    "filelock>=3.20.0",
+    "exceptiongroup>=1.0.0; python_version < '3.11'",
+    "typing-extensions>=4.0.0",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.10,<4.0.0"
-requests = ">=2.25.1"
-streamerate = ">=1.2.1"
-pyxtension = ">=1.17.1"
-StrEnum = ">=0.4.0"
-filelock = ">=3.20.0"
-minio = { version = ">=7.2.4,<=8.0.0", optional = true }
-multiminio = { version = ">=1.0.2", optional = true }
-exceptiongroup = { version = ">=1.0.0", python = "<3.11" }
+[project.urls]
+Repository = "https://github.com/asuiu/bucketbase"
 
-[tool.poetry.extras]
-minio = ["minio", "multiminio"]
+[project.optional-dependencies]
+minio = [
+    "certifi>=2024.0.0",
+    "minio>=7.2.4,<=8.0.0",
+    "multiminio>=1.0.2",
+    "packaging>=23.0",
+    "urllib3>=1.26.0",
+]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.5"
-minio = "^7.2.18"
-multiminio = "^1.0.2"
-tsx = ">=0.2.14"
-pyarrow = ">=21.0.0"
-twine = ">=6.1.0"
-pre-commit = ">=4.3.0"
-mypy = "^1.18.2"
-psutil = "^7.1.3"
+[dependency-groups]
+dev = [
+    "minio>=7.2.18,<8.0.0",
+    "multiminio>=1.0.2,<2.0.0",
+    "packaging>=23.0",
+    "tsx>=0.2.14",
+    "pyarrow>=21.0.0",
+    "twine>=6.1.0",
+    "pre-commit>=4.3.0",
+    "psutil>=7.1.3,<8.0.0",
+]
 
 [tool.black]
 line-length = 160
@@ -78,7 +85,7 @@ sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.2.3"  # do not edit manually. kept in sync with `tool.poetry` config via automation
+version = "1.2.3"  # do not edit manually. kept in sync with `project` config via automation
 tag_format = "v$version"
 
 # Same as Black.
@@ -92,6 +99,21 @@ exclude_also = [
     "if TYPE_CHECKING:"
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["bucketbase"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/.pytest.ini",
+    "/README.py.md",
+    "/bucketbase",
+    "/pyproject.toml",
+    "/tests",
+    "/upload.bat",
+    "/upload.sh",
+    "/uv.lock",
+]
+
 [build-system]
-requires = ["poetry>=1.3"]
-build-backend = "poetry.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

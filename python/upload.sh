@@ -1,4 +1,6 @@
 #!/bin/bash
-rm ./dist/*.whl
-poetry build
-twine upload dist/*.whl
+set -euo pipefail
+
+rm -f ./dist/*.whl ./dist/*.tar.gz
+uv build
+uv run twine upload dist/*.whl --verbose
