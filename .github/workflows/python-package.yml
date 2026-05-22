@@ -34,13 +34,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        env:
-          POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          uv pip install --system poetry
           cd python
-          poetry lock
-          poetry install --with dev
+          uv sync --all-extras --dev --python ${{ matrix.python-version }}
       - name: Run tests
         env:
           MINIO_PUBLIC_SERVER: play.min.io
@@ -49,7 +45,7 @@ jobs:
           MINIO_DEV_TESTS_BUCKET: bucketbase-test
         run: |
           cd python
-          poetry run python -m unittest discover -s tests -p "test_*.py" -v
+          uv run python -m unittest discover -s tests -p "test_*.py" -v
 
   build-container:
     runs-on: ubuntu-latest
@@ -62,13 +58,9 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies in container
-        env:
-          POETRY_VIRTUALENVS_PREFER_UV: "true"
         run: |
-          uv pip install --system poetry
           cd python
-          poetry lock
-          poetry install --with dev
+          uv sync --all-extras --dev
       - name: Run tests in container
         env:
           MINIO_PUBLIC_SERVER: play.min.io
@@ -77,5 +69,4 @@ jobs:
           MINIO_DEV_TESTS_BUCKET: bucketbase-test
         run: |
           cd python
-          poetry run python -m unittest discover -s tests -p "test_*.py" -v
-
+          uv run python -m unittest discover -s tests -p "test_*.py" -v
