@@ -7,7 +7,8 @@ readme = "README.py.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0.0"
 dependencies = [
-    "streamerate>=1.2.1",
+    "streamerate>=1.2.1,<1.2.7; python_version < '3.11'",
+    "streamerate>=1.2.1; python_version >= '3.11'",
     "pyxtension>=1.17.1",
     "filelock>=3.20.0",
     "exceptiongroup>=1.0.0; python_version < '3.11'",
