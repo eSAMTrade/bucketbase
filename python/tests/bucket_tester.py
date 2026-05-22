@@ -9,7 +9,7 @@ import uuid
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from queue import Queue
-from typing import Any, BinaryIO
+from typing import BinaryIO
 from unittest import TestCase
 
 import pyarrow as pa
