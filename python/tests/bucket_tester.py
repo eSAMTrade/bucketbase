@@ -17,6 +17,7 @@ import pyarrow.parquet as pq
 from streamerate import slist
 from streamerate import stream as sstream
 
+from bucketbase import VersionedMinioBucket
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
 
 
@@ -79,8 +80,8 @@ class FailingStream(io.IOBase):
         return True
 
 
-class VersionedIBucketTester:  # pylint: disable=too-many-public-methods
-    def __init__(self, storage: Any, test_case: TestCase) -> None:
+class VersionedIBucketTester:
+    def __init__(self, storage: VersionedMinioBucket, test_case: TestCase) -> None:
         self.storage = storage
         self.test_case = test_case
         self.us = uuid.uuid4().hex

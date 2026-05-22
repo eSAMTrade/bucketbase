@@ -155,10 +155,12 @@ class TestIntegratedVersionedMinioBucket(TestCase):
         self.tester = VersionedIBucketTester(self.bucket, self)
 
     def tearDown(self) -> None:
-        if hasattr(self, "tester"):
-            self.tester.cleanup()
-        if hasattr(self, "minio_client") and hasattr(self, "bucket_name"):
+        if not hasattr(self, "minio_client") or not hasattr(self, "bucket_name"):
+            return
+
+        try:
             self._remove_all_bucket_versions()
+        finally:
             self.minio_client.remove_bucket(self.bucket_name)
 
     @staticmethod
