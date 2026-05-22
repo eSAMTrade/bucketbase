@@ -19,11 +19,6 @@ from streamerate import stream as sstream
 
 from bucketbase.ibucket import AsyncObjectWriter, IBucket
 
-try:
-    from aicodesign import ai_draft
-except ModuleNotFoundError:
-    ai_draft = lambda _model: lambda obj: obj  # type: ignore[assignment]  # noqa: E731
-
 
 class MockException(Exception):
     pass
@@ -84,26 +79,21 @@ class FailingStream(io.IOBase):
         return True
 
 
-@ai_draft("GPT-5")
 class VersionedIBucketTester:  # pylint: disable=too-many-public-methods
-    @ai_draft("GPT-5")
     def __init__(self, storage: Any, test_case: TestCase) -> None:
         self.storage = storage
         self.test_case = test_case
         self.us = uuid.uuid4().hex
         self._tracked_names: list[PurePosixPath] = []
 
-    @ai_draft("GPT-5")
     def cleanup(self) -> None:
         for name in self._tracked_names:
             self.storage.remove_object_with_versions(name)
 
-    @ai_draft("GPT-5")
     def _track(self, name: PurePosixPath) -> PurePosixPath:
         self._tracked_names.append(name)
         return name
 
-    @ai_draft("GPT-5")
     def test_full_cycle_object_versions_after_overwrite(self) -> None:
         path = self._track(PurePosixPath(f"dir{self.us}/versioned.txt"))
 
@@ -146,7 +136,6 @@ class VersionedIBucketTester:  # pylint: disable=too-many-public-methods
         with self.test_case.assertRaises(FileNotFoundError):
             self.storage.get_object_version(path, old_versions[0].version_id)
 
-    @ai_draft("GPT-5")
     def test_remove_objects_for_missing_name_does_not_create_version_history(self) -> None:
         path = self._track(PurePosixPath(f"dir{self.us}/missing-versioned.txt"))
 
@@ -155,7 +144,6 @@ class VersionedIBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertEqual([], list(errors))
         self.test_case.assertEqual([], list(self.storage.list_object_versions(path)))
 
-    @ai_draft("GPT-5")
     def test_invalid_names_raise_for_version_methods(self) -> None:
         self.test_case.assertRaises(ValueError, self.storage.list_object_versions, "/")
         self.test_case.assertRaises(ValueError, self.storage.get_object_version, "/", "v1")

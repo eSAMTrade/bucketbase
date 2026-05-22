@@ -12,13 +12,6 @@ from urllib3 import BaseHTTPResponse
 from bucketbase.ibucket import ObjectStream
 from bucketbase.minio_bucket import MinioBucket, MinioObjectStream
 
-try:
-    from aicodesign import ai_draft
-except ModuleNotFoundError:
-    ai_draft = lambda _model: lambda obj: obj  # type: ignore[assignment]  # noqa: E731
-
-
-@ai_draft("GPT-5")
 @dataclass(frozen=True)
 class ObjectVersion:
     name: PurePosixPath
@@ -27,10 +20,8 @@ class ObjectVersion:
     is_delete_marker: bool = False
 
 
-@ai_draft("GPT-5")
 class VersionedMinioBucket(MinioBucket):
     @staticmethod
-    @ai_draft("GPT-5")
     def _to_bool(value: object) -> bool:
         if isinstance(value, bool):
             return value
@@ -39,7 +30,6 @@ class VersionedMinioBucket(MinioBucket):
         return str(value).lower() == "true"
 
     @classmethod
-    @ai_draft("GPT-5")
     def _to_object_version(cls, obj: Object) -> ObjectVersion:
         object_name = cls._get_object_name(obj)
         version_id = obj.version_id
@@ -53,13 +43,11 @@ class VersionedMinioBucket(MinioBucket):
             is_delete_marker=cls._to_bool(obj.is_delete_marker),
         )
 
-    @ai_draft("GPT-5")
     def list_object_versions(self, name: PurePosixPath | str) -> slist[ObjectVersion]:
         _name = self._validate_name(name)
         listing_itr = self._minio_client.list_objects(bucket_name=self._bucket_name, prefix=_name, recursive=True, include_version=True)
         return sstream(listing_itr).filter(lambda obj: self._get_object_name(obj) == _name).map(self._to_object_version).to_list()
 
-    @ai_draft("GPT-5")
     def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
         with self.get_object_version_stream(name, version_id) as response:
             assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
@@ -68,7 +56,6 @@ class VersionedMinioBucket(MinioBucket):
                 data += buffer
             return data
 
-    @ai_draft("GPT-5")
     def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         _name = self._validate_name(name)
         validate(isinstance(version_id, str), f"version_id must be str, but got {type(version_id)}", exc=ValueError)
@@ -82,7 +69,6 @@ class VersionedMinioBucket(MinioBucket):
 
         return MinioObjectStream(response, PurePosixPath(_name))
 
-    @ai_draft("GPT-5")
     def remove_object_with_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
         versions = self.list_object_versions(name)
         if versions.size() == 0:
