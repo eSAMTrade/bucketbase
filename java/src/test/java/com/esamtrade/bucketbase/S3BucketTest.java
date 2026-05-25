@@ -9,7 +9,6 @@ import java.io.IOException;
 
 class S3BucketTest {
 
-    private S3Bucket bucket;
     private IBucketTester tester;
 
     @BeforeAll
@@ -21,7 +20,7 @@ class S3BucketTest {
     public void setUp() {
         String accessKey = System.getenv("MINIO_ACCESS_KEY");
         String secretKey = System.getenv("MINIO_SECRET_KEY");
-        bucket = new S3Bucket("https://minio.esamtrade.vlada.ro", accessKey, secretKey, "minio-dev-tests");
+        S3Bucket bucket = new S3Bucket("https://minio.esamtrade.vlada.ro", accessKey, secretKey, "minio-dev-tests");
         tester = new IBucketTester(bucket);
     }
 
@@ -39,6 +38,21 @@ class S3BucketTest {
     @Test
     void putObjectAndGetObjectStream() throws IOException {
         tester.testPutAndGetObjectStream();
+    }
+
+    @Test
+    void testPutAndGetParquetObjectStream() throws IOException {
+        tester.testPutAndGetParquetObjectStream();
+    }
+
+    @Test
+    void testPutAndGetMultiUploadObjectStream() throws IOException {
+        tester.testPutAndGetMultiUploadLargeParquetObjectStream();
+    }
+
+    @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
     }
 
     @Test
