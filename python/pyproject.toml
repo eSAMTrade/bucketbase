@@ -1,12 +1,13 @@
 [project]
 name = "bucketbase"
-version = "1.6.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
+version = "1.7.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
 authors = [{ name = "Andrei Suiu", email = "andrei.suiu@gmail.com" }]
 readme = "README.py.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0.0"
 dependencies = [
+    "aicodesign>=0.1.1",
     "streamerate>=1.2.1,<1.2.7; python_version < '3.11'",
     "streamerate>=1.2.1; python_version >= '3.11'",
     "pyxtension>=1.17.1",
@@ -40,7 +41,7 @@ dev = [
 ]
 
 [tool.black]
-line-length = 160
+line-length = 180
 include = '\.pyi?$'
 default_language_version = '3.10'
 
@@ -63,7 +64,7 @@ output-format = "colorized"
 enable = "useless-suppression"
 
 [tool.pylint.design]
-max-line-length = 160
+max-line-length = 180
 max-locals = 25
 max-args = 10
 
@@ -89,7 +90,7 @@ version = "1.2.3"  # do not edit manually. kept in sync with `project` config vi
 tag_format = "v$version"
 
 # Same as Black.
-line-length = 160
+line-length = 180
 
 [tool.coverage.run]
 branch = true

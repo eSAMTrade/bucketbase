@@ -14,6 +14,7 @@ from unittest import TestCase
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from aicodesign import ai_blackbox
 from streamerate import slist
 from streamerate import stream as sstream
 
@@ -151,6 +152,25 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
             with gzip.open(file, "rt") as file:
                 result = file.read()
         self.test_case.assertEqual(result, "Test\ncontent")
+
+    @ai_blackbox()
+    def test_get_object_stream_is_seekable(self) -> None:
+        path = PurePosixPath(f"dir{self.us}/seekable.bin")
+        content = b"0123456789abcdefghijklmnopqrstuvwxyz"
+        self.storage.put_object(path, content)
+
+        with self.storage.get_object_stream(path) as stream:
+            self.test_case.assertTrue(stream.readable())
+            self.test_case.assertTrue(stream.seekable())
+            self.test_case.assertEqual(b"0123", stream.read(4))
+            self.test_case.assertEqual(10, stream.seek(10))
+            self.test_case.assertEqual(b"abcd", stream.read(4))
+            self.test_case.assertEqual(12, stream.seek(-2, io.SEEK_CUR))
+            self.test_case.assertEqual(b"cd", stream.read(2))
+            self.test_case.assertEqual(len(content) - 4, stream.seek(-4, io.SEEK_END))
+            destination = bytearray(4)
+            self.test_case.assertEqual(4, stream.readinto(destination))  # type: ignore[attr-defined]
+            self.test_case.assertEqual(b"wxyz", destination)
 
     def test_streaming_failure_atomicity(self) -> None:
         """
@@ -693,6 +713,40 @@ class IBucketTester:  # pylint: disable=too-many-public-methods
         self.test_case.assertEqual(actives, expected_actives)
         if isinstance(tested_object, AsyncObjectWriter):
             self.test_case.assertFalse(tested_object._thread.is_alive())  # pylint: disable=W0212
+
+    @ai_blackbox()
+    def test_get_object_stream_with_parquet_tail(self) -> None:
+        unique_dir = f"dir{self.us}"
+        parquet_path = PurePosixPath(f"{unique_dir}/seekable.parquet")
+        schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("active", pa.bool_())])
+
+        parquet_data = io.BytesIO()
+        with pq.ParquetWriter(parquet_data, schema) as writer:
+            for row_group in range(3):
+                start = row_group * 100
+                writer.write_batch(
+                    pa.record_batch(
+                        {
+                            "id": list(range(start, start + 100)),
+                            "name": [f"row-{record_id}" for record_id in range(start, start + 100)],
+                            "active": [record_id % 2 == 0 for record_id in range(start, start + 100)],
+                        },
+                        schema=schema,
+                    )
+                )
+        self.storage.put_object(parquet_path, parquet_data.getvalue())
+
+        with self.storage.get_object_stream(parquet_path) as stream:
+            parquet_file = pq.ParquetFile(stream)
+            self.test_case.assertTrue(stream.seekable())
+            self.test_case.assertEqual(300, parquet_file.metadata.num_rows)
+            selected = parquet_file.read_row_group(parquet_file.num_row_groups - 1, columns=["id", "active"])
+            tail = selected.slice(len(selected) - 75)
+
+        expected_ids = list(range(225, 300))
+        self.test_case.assertEqual(["id", "active"], tail.column_names)
+        self.test_case.assertEqual(expected_ids, tail.column("id").to_pylist())
+        self.test_case.assertEqual([record_id % 2 == 0 for record_id in expected_ids], tail.column("active").to_pylist())
 
     def test_put_object_stream_exception_cleanup(self) -> None:
         """

@@ -89,6 +89,10 @@ class TestIntegratedCachedImmutableBucket(TestCase):
         self.assertFalse(self.cache.exists(path))
         self.assertTrue(self.bucket_in_test.exists(path))
         with self.bucket_in_test.get_object_stream(path) as stream:
+            self.assertTrue(stream.seekable())
+            stream.seek(-7, io.SEEK_END)
+            self.assertEqual(b"content", stream.read())
+            stream.seek(0)
             retrieved_content = stream.read()
         self.assertEqual(retrieved_content, b_content)
         self.assertTrue(self.bucket_in_test.exists(path))

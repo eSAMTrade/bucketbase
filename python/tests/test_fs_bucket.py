@@ -31,6 +31,9 @@ class TestFSBucket(TestCase):
         # check no remaining files in temp dir
         self.assertEqual(0, len(list((self.storage._root / self.storage.BUCKETBASE_TMP_DIR_NAME).iterdir())))
 
+    def test_get_object_stream_is_seekable(self) -> None:
+        self.tester.test_get_object_stream_is_seekable()
+
     def test_list_objects(self) -> None:
         self.tester.test_list_objects()
 
@@ -87,6 +90,9 @@ class TestFSBucket(TestCase):
 
     def test_open_write_with_parquet(self) -> None:
         self.tester.test_open_write_with_parquet()
+
+    def test_get_object_stream_with_parquet_tail(self) -> None:
+        self.tester.test_get_object_stream_with_parquet_tail()
 
     def test_streaming_failure_atomicity(self) -> None:
         self.tester.test_streaming_failure_atomicity()

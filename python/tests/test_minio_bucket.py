@@ -31,6 +31,9 @@ class TestIntegratedMinioBucket(TestCase):
     def test_put_and_get_object_stream(self) -> None:
         self.tester.test_put_and_get_object_stream()
 
+    def test_get_object_stream_is_seekable(self) -> None:
+        self.tester.test_get_object_stream_is_seekable()
+
     def test_list_objects(self) -> None:
         self.tester.test_list_objects()
 
@@ -66,6 +69,9 @@ class TestIntegratedMinioBucket(TestCase):
 
     def test_open_write_with_parquet(self) -> None:
         self.tester.test_open_write_with_parquet()
+
+    def test_get_object_stream_with_parquet_tail(self) -> None:
+        self.tester.test_get_object_stream_with_parquet_tail()
 
     def test_streaming_failure_atomicity(self) -> None:
         self.tester.test_streaming_failure_atomicity()
