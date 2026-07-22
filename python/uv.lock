@@ -9,6 +9,15 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "aicodesign"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/62/97a0fa2256c92903e1de49cec740b6b53dda5f5ed0e6dd047ae40fd064d4/aicodesign-0.1.1.tar.gz", hash = "sha256:8b60ddcff240dad3a5b8c0f55f6f4fea5c92aa4524e50e4bf9bf33983cc526d9", size = 4756, upload-time = "2026-07-18T17:50:14.538Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/d1/6d2b781b2d54fd8876039c6121106e6c057313d0c161f7a6ab84de80f542/aicodesign-0.1.1-py3-none-any.whl", hash = "sha256:caa212232e7354c71be220c824771350f4687a61d11a92cf112fb2eb30b9c59a", size = 3057, upload-time = "2026-07-18T17:50:13.517Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -76,9 +85,10 @@ wheels = [
 
 [[package]]
 name = "bucketbase"
-version = "1.6.0"
+version = "1.7.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aicodesign" },
     { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
     { name = "filelock" },
     { name = "pyxtension" },
@@ -110,6 +120,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aicodesign", specifier = ">=0.1.1" },
     { name = "certifi", marker = "extra == 'minio'", specifier = ">=2024.0.0" },
     { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.0.0" },
     { name = "filelock", specifier = ">=3.20.0" },

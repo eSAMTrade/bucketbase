@@ -19,6 +19,9 @@ class TestMemoryBucket(TestCase):
     def test_put_and_get_object_stream(self):
         self.tester.test_put_and_get_object_stream()
 
+    def test_get_object_stream_is_seekable(self):
+        self.tester.test_get_object_stream_is_seekable()
+
     def test_list_objects(self):
         self.tester.test_list_objects()
 
@@ -48,6 +51,9 @@ class TestMemoryBucket(TestCase):
 
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()
+
+    def test_get_object_stream_with_parquet_tail(self):
+        self.tester.test_get_object_stream_with_parquet_tail()
 
     def test_streaming_failure_atomicity(self):
         self.tester.test_streaming_failure_atomicity()
@@ -130,6 +136,9 @@ class TestSharedMemoryBucket(TestCase, _SharedManagerMixin):
     def test_put_and_get_object_stream(self):
         self.tester.test_put_and_get_object_stream()
 
+    def test_get_object_stream_is_seekable(self):
+        self.tester.test_get_object_stream_is_seekable()
+
     def test_list_objects(self):
         self.tester.test_list_objects()
 
@@ -159,6 +168,9 @@ class TestSharedMemoryBucket(TestCase, _SharedManagerMixin):
 
     def test_open_write_with_parquet(self):
         self.tester.test_open_write_with_parquet()
+
+    def test_get_object_stream_with_parquet_tail(self):
+        self.tester.test_get_object_stream_with_parquet_tail()
 
     def test_streaming_failure_atomicity(self):
         self.tester.test_streaming_failure_atomicity()

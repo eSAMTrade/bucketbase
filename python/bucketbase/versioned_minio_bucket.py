@@ -7,10 +7,10 @@ from minio.deleteobjects import DeleteError, DeleteObject
 from pyxtension import validate
 from streamerate import slist
 from streamerate import stream as sstream
-from urllib3 import BaseHTTPResponse
 
 from bucketbase.ibucket import ObjectStream
-from bucketbase.minio_bucket import MinioBucket, MinioObjectStream
+from bucketbase.minio_bucket import MinioBucket
+
 
 @dataclass(frozen=True)
 class ObjectVersion:
@@ -50,24 +50,18 @@ class VersionedMinioBucket(MinioBucket):
 
     def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
         with self.get_object_version_stream(name, version_id) as response:
-            assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
-            data = bytes()
-            for buffer in response.stream(amt=1024 * 1024):
-                data += buffer
-            return data
+            return response.read()
 
     def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         _name = self._validate_name(name)
         validate(isinstance(version_id, str), f"version_id must be str, but got {type(version_id)}", exc=ValueError)
 
         try:
-            response: BaseHTTPResponse = self._minio_client.get_object(self._bucket_name, _name, version_id=version_id)
+            return self._open_object_stream(_name, version_id=version_id)
         except minio.error.S3Error as e:
             if e.code in ("MethodNotAllowed", "NoSuchKey", "NoSuchVersion"):
                 raise FileNotFoundError(f"Object {_name} version {version_id} not found in bucket {self._bucket_name} on Minio") from e
             raise
-
-        return MinioObjectStream(response, PurePosixPath(_name))
 
     def remove_object_with_versions(self, name: PurePosixPath | str) -> slist[DeleteError]:
         versions = self.list_object_versions(name)

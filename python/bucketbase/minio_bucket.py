@@ -2,42 +2,146 @@ import io
 import logging
 import os
 from pathlib import Path, PurePosixPath
+from threading import RLock
 from typing import BinaryIO, Iterable, Union
 
 import certifi
 import minio
 import urllib3
+from aicodesign import ai_blackbox
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
-from minio.helpers import MAX_PART_SIZE, MIN_PART_SIZE
+from minio.helpers import MAX_PART_SIZE, MIN_PART_SIZE, DictType
 from multiminio import MultiMinio
 from packaging import version as pkg_version
 from pyxtension import validate
 from streamerate import slist
 from streamerate import stream as sstream
-from urllib3 import BaseHTTPResponse
+from typing_extensions import override
 
 from bucketbase.ibucket import IBucket, ObjectStream, ShallowListing
 
 
+@ai_blackbox()
+class _MinioRangeReader(io.RawIOBase):
+    @ai_blackbox()
+    def __init__(self, minio_client: Minio, bucket_name: str, object_name: str, version_id: str | None = None) -> None:
+        super().__init__()
+        metadata = minio_client.stat_object(bucket_name, object_name, version_id=version_id)
+        self._minio_client = minio_client
+        self._bucket_name = bucket_name
+        self._object_name = object_name
+        self._version_id = version_id
+        if metadata.size is None:
+            raise IOError(f"Minio returned no size for {object_name}")
+        self._size = metadata.size
+        self._etag = metadata.etag
+        self._position = 0
+        self._lock = RLock()
+
+    @override
+    @ai_blackbox()
+    def readable(self) -> bool:
+        self._check_closed()
+        return True
+
+    @override
+    @ai_blackbox()
+    def seekable(self) -> bool:
+        self._check_closed()
+        return True
+
+    @override
+    @ai_blackbox()
+    def tell(self) -> int:
+        self._check_closed()
+        with self._lock:
+            return self._position
+
+    @override
+    @ai_blackbox()
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        self._check_closed()
+        with self._lock:
+            if whence == io.SEEK_SET:
+                position = offset
+            elif whence == io.SEEK_CUR:
+                position = self._position + offset
+            elif whence == io.SEEK_END:
+                position = self._size + offset
+            else:
+                raise ValueError(f"Invalid whence: {whence}")
+            if position < 0:
+                raise ValueError(f"Negative seek position: {position}")
+            self._position = position
+            return position
+
+    @override
+    @ai_blackbox()
+    def read(self, size: int = -1) -> bytes:
+        self._check_closed()
+        with self._lock:
+            remaining = max(0, self._size - self._position)
+            length = remaining if size is None or size < 0 else min(size, remaining)
+            if length == 0:
+                return b""
+
+            request_headers: DictType | None = {"If-Match": f'"{self._etag}"'} if self._etag else None
+            response = self._minio_client.get_object(
+                self._bucket_name,
+                self._object_name,
+                offset=self._position,
+                length=length,
+                request_headers=request_headers,
+                version_id=self._version_id,
+            )
+            try:
+                data = response.read()
+            finally:
+                response.close()
+                response.release_conn()
+
+            if len(data) != length:
+                raise IOError(f"Expected {length} bytes from {self._object_name} at offset {self._position}, but received {len(data)}")
+            self._position += length
+            return data
+
+    @override
+    @ai_blackbox()
+    def readall(self) -> bytes:
+        return self.read()
+
+    @override
+    @ai_blackbox()
+    def readinto(self, buffer: bytearray | memoryview) -> int:
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    @ai_blackbox()
+    def _check_closed(self) -> None:
+        if self.closed:  # pylint: disable=using-constant-test
+            raise ValueError("I/O operation on closed file")
+
+
+@ai_blackbox()
 class MinioObjectStream(ObjectStream):
-    def __init__(self, response: BaseHTTPResponse, object_name: PurePosixPath) -> None:
-        # Wrap the BaseHTTPResponse to make it compatible with BinaryIO
-        super().__init__(response, object_name)  # type: ignore[arg-type]
-        self._response = response
-        self._size = int(response.headers.get("content-length", -1))
-
-    def __enter__(self) -> BinaryIO:
-        return self._response  # type: ignore[return-value]
-
-    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object | None) -> None:
-        self._response.close()
-        self._response.release_conn()
+    @ai_blackbox()
+    def __init__(self, minio_client: Minio, *, bucket_name: str, object_name: PurePosixPath, read_buffer_size: int, version_id: str | None = None) -> None:
+        raw_reader = _MinioRangeReader(minio_client, bucket_name, str(object_name), version_id=version_id)
+        stream: BinaryIO = io.BufferedReader(raw_reader, buffer_size=read_buffer_size) if read_buffer_size > 0 else raw_reader
+        super().__init__(stream, object_name)
 
 
 def build_minio_client(  # pylint: disable=too-many-positional-arguments
-    endpoints: str, access_key: str, secret_key: str, secure: bool = True, region: str | None = "us-east-1", conn_pool_size: int = 128, timeout: int = 5
+    endpoints: str,
+    access_key: str,
+    secret_key: str,
+    secure: bool = True,
+    region: str | None = "us-east-1",
+    conn_pool_size: int = 128,
+    timeout: int = 5,
 ) -> Minio:
     """
     :param endpoints: comma separated list of endpoints
@@ -113,42 +217,63 @@ class MinioBucket(IBucket):
     # Default part size for multipart uploads (16 MiB)
     # Increased from MinIO library default (5 MiB) for better performance and to allow for objects up to 160GiB
     DEFAULT_PART_SIZE = 16 * 1024 * 1024
+    DEFAULT_READ_BUFFER_SIZE = 128 * 1024
     _USES_NAME_ATTRIBUTE: bool = _detect_minio_object_name_attribute()
 
-    def __init__(self, bucket_name: str, minio_client: Minio, part_size: int | None = None) -> None:
+    def __init__(
+        self,
+        bucket_name: str,
+        minio_client: Minio,
+        part_size: int | None = None,
+        *,
+        read_buffer_size: int = DEFAULT_READ_BUFFER_SIZE,
+    ) -> None:
         if part_size is None:
             part_size = self.DEFAULT_PART_SIZE
-        validate(MIN_PART_SIZE <= part_size <= MAX_PART_SIZE, f"part_size must be between {MIN_PART_SIZE} and {MAX_PART_SIZE}", exc=ValueError)
+        validate(
+            MIN_PART_SIZE <= part_size <= MAX_PART_SIZE,
+            f"part_size must be between {MIN_PART_SIZE} and {MAX_PART_SIZE}",
+            exc=ValueError,
+        )
+        validate(
+            isinstance(read_buffer_size, int) and not isinstance(read_buffer_size, bool) and read_buffer_size >= 0,
+            "read_buffer_size must be a non-negative int",
+            exc=ValueError,
+        )
         self._minio_client = minio_client
         self._bucket_name = bucket_name
         self._part_size = part_size
+        self._read_buffer_size = read_buffer_size
 
     @classmethod
     def _get_object_name(cls, obj: Object) -> str:
-        return obj.name if cls._USES_NAME_ATTRIBUTE else obj.object_name
+        object_name = getattr(obj, "name", None) if cls._USES_NAME_ATTRIBUTE else obj.object_name
+        if object_name is None:
+            raise ValueError("Minio object listing item has no object name")
+        return object_name
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
         with self.get_object_stream(name) as response:
-            assert isinstance(response, BaseHTTPResponse), f"Expected IOBase, got {type(response)}"
-            try:
-                data = bytes()
-                for buffer in response.stream(amt=1024 * 1024):
-                    data += buffer
-                return data
-            finally:
-                response.release_conn()
+            return response.read()
+
+    @ai_blackbox()
+    def _open_object_stream(self, name: str, *, version_id: str | None = None) -> ObjectStream:
+        return MinioObjectStream(
+            self._minio_client,
+            bucket_name=self._bucket_name,
+            object_name=PurePosixPath(name),
+            read_buffer_size=self._read_buffer_size,
+            version_id=version_id,
+        )
 
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         _name = self._validate_name(name)
         try:
-            response: BaseHTTPResponse = self._minio_client.get_object(self._bucket_name, _name)
+            return self._open_object_stream(_name)
         except minio.error.S3Error as e:
             if e.code == "NoSuchKey":
                 raise FileNotFoundError(f"Object {_name} not found in bucket {self._bucket_name} on Minio") from e
             raise
-
-        _name_path = PurePosixPath(_name) if isinstance(_name, str) else _name
-        return MinioObjectStream(response, _name_path)
 
     def fget_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         """
@@ -167,11 +292,22 @@ class MinioBucket(IBucket):
         _content = self._encode_content(content)
         _name = self._validate_name(name)
         f = io.BytesIO(_content)
-        self._minio_client.put_object(bucket_name=self._bucket_name, object_name=_name, data=f, length=len(_content))
+        self._minio_client.put_object(
+            bucket_name=self._bucket_name,
+            object_name=_name,
+            data=f,
+            length=len(_content),
+        )
 
     def put_object_stream(self, name: PurePosixPath | str, stream: BinaryIO) -> None:
         _name = self._validate_name(name)
-        self._minio_client.put_object(bucket_name=self._bucket_name, object_name=_name, data=stream, length=-1, part_size=self._part_size)
+        self._minio_client.put_object(
+            bucket_name=self._bucket_name,
+            object_name=_name,
+            data=stream,
+            length=-1,
+            part_size=self._part_size,
+        )
 
     def fput_object(self, name: PurePosixPath | str, file_path: Path) -> None:
         _name = self._validate_name(name)
@@ -219,6 +355,8 @@ class MinioBucket(IBucket):
     def get_size(self, name: PurePosixPath | str) -> int:
         try:
             st = self._minio_client.stat_object(self._bucket_name, str(name))
+            if st.size is None:
+                raise IOError(f"Minio returned no size for {name}")
             return st.size
         except minio.error.S3Error as e:
             if e.code == "NoSuchKey":

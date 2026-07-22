@@ -249,7 +249,8 @@ class IBucket(PydanticStrictValidated, ABC):
     @abstractmethod
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         """
-        Retrieves a stream for reading the object's content.
+        Retrieves a readable, seekable stream for the object's content.
+        The yielded stream supports read(), readinto(), seek(), tell(), readable(), and seekable().
 
         :param name: Name of the object to retrieve
         :return: ObjectStream instance for reading the content

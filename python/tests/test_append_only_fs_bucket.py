@@ -1,3 +1,4 @@
+import io
 import tempfile
 import threading
 import time
@@ -121,6 +122,10 @@ class TestAppendOnlyFSBucket(unittest.TestCase):
         self.assertEqual(retrieved_content, content)
         obj_stream = bucket_in_test.get_object_stream(object_name)
         with obj_stream as stream:
+            self.assertTrue(stream.seekable())
+            stream.seek(-7, io.SEEK_END)
+            self.assertEqual(b"content", stream.read())
+            stream.seek(0)
             retrieved_content_stream_content = stream.read()
         self.assertEqual(retrieved_content_stream_content, content)
 

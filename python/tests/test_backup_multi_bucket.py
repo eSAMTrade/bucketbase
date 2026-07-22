@@ -1,5 +1,6 @@
 # mypy: disable-error-code="no-untyped-def"
 import gc
+import io
 import os
 import tempfile
 import threading
@@ -470,6 +471,10 @@ class TestBackupMultiBucketGetOperations(TestCase):
         self.bucket1.put_object_stream(self.test_name, BytesIO(self.test_content))
 
         with self.multi_bucket.get_object_stream(self.test_name) as stream:
+            self.assertTrue(stream.seekable())
+            stream.seek(-7, io.SEEK_END)
+            self.assertEqual(self.test_content[-7:], stream.read())
+            stream.seek(0)
             result = stream.read()
         self.assertEqual(result, self.test_content)
 

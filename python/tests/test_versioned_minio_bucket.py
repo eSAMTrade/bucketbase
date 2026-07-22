@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 from typing import Iterable, Iterator, Optional
 from unittest import TestCase
 
+from aicodesign import ai_blackbox
 from minio import Minio
 from minio.datatypes import Object
 from minio.deleteobjects import DeleteError, DeleteObject
@@ -53,6 +54,10 @@ class VersionedIBucketTester:
         self.test_case.assertEqual(b"new content", self.storage.get_object(path))
         self.test_case.assertEqual(b"old content", self.storage.get_object_version(path, old_versions[0].version_id))
         with self.storage.get_object_version_stream(path, old_versions[0].version_id) as stream:
+            self.test_case.assertTrue(stream.seekable())
+            stream.seek(-7, io.SEEK_END)
+            self.test_case.assertEqual(b"content", stream.read())
+            stream.seek(0)
             self.test_case.assertEqual(b"old content", stream.read())
 
         errors = self.storage.remove_objects([path])
@@ -95,11 +100,12 @@ class VersionedIBucketTester:
 class MockVersionedMinioClient(Minio):
     def __init__(self) -> None:
         self.list_objects_response: list[Object] = []
-        self.get_object_responses_by_version: dict[str | None, HTTPResponse] = {}
+        self.content_by_version: dict[str | None, bytes] = {}
         self.get_object_error: S3Error | None = None
         self.remove_errors: list[DeleteError] = []
         self.list_objects_calls: list[dict[str, object]] = []
         self.get_object_calls: list[dict[str, object]] = []
+        self.stat_object_calls: list[dict[str, object]] = []
         self.remove_objects_calls: list[tuple[str, list[DeleteObject]]] = []
 
     def list_objects(self, **kwargs: object) -> Iterator[Object]:
@@ -107,6 +113,25 @@ class MockVersionedMinioClient(Minio):
         return iter(self.list_objects_response)
 
     @override
+    @ai_blackbox()
+    def stat_object(
+        self,
+        bucket_name: str,
+        object_name: str,
+        ssec: Optional[SseCustomerKey] = None,
+        version_id: Optional[str] = None,
+        extra_headers: Optional[DictType] = None,
+        extra_query_params: Optional[DictType] = None,
+    ) -> Object:
+        del ssec, extra_headers, extra_query_params
+        self.stat_object_calls.append({"bucket_name": bucket_name, "object_name": object_name, "version_id": version_id})
+        if self.get_object_error is not None:
+            raise self.get_object_error
+        content = self.content_by_version[version_id]
+        return Object(bucket_name, object_name, etag=f"etag-{version_id}", size=len(content), version_id=version_id)
+
+    @override
+    @ai_blackbox()
     def get_object(
         self,
         bucket_name: str,
@@ -118,10 +143,25 @@ class MockVersionedMinioClient(Minio):
         version_id: Optional[str] = None,
         extra_query_params: Optional[DictType] = None,
     ) -> HTTPResponse:
-        self.get_object_calls.append({"bucket_name": bucket_name, "object_name": object_name, "version_id": version_id})
+        self.get_object_calls.append(
+            {
+                "bucket_name": bucket_name,
+                "object_name": object_name,
+                "offset": offset,
+                "length": length,
+                "request_headers": request_headers,
+                "version_id": version_id,
+            }
+        )
         if self.get_object_error is not None:
             raise self.get_object_error
-        return self.get_object_responses_by_version[version_id]
+        content = self.content_by_version[version_id]
+        return self._make_response(content[offset : offset + length] if length else content[offset:])
+
+    @staticmethod
+    @ai_blackbox()
+    def _make_response(content: bytes) -> HTTPResponse:
+        return HTTPResponse(body=io.BytesIO(content), headers={"content-length": str(len(content))}, preload_content=False)
 
     @override
     def remove_objects(self, bucket_name: str, delete_object_list: Iterable[DeleteObject], bypass_governance_mode: bool = False) -> Iterator[DeleteError]:
@@ -143,10 +183,6 @@ class TestVersionedMinioBucket(TestCase):
             is_latest=is_latest,
             is_delete_marker=is_delete_marker,
         )
-
-    @staticmethod
-    def _make_response(content: bytes) -> HTTPResponse:
-        return HTTPResponse(body=io.BytesIO(content), headers={"content-length": str(len(content))}, preload_content=False)
 
     @staticmethod
     def _make_s3_error(code: str) -> S3Error:
@@ -180,12 +216,25 @@ class TestVersionedMinioBucket(TestCase):
             self.bucket.list_object_versions("dir/file.txt")
 
     def test_get_object_version_reads_specific_version(self) -> None:
-        self.mock_client.get_object_responses_by_version["v1"] = self._make_response(b"old content")
+        self.mock_client.content_by_version["v1"] = b"old content"
 
         content = self.bucket.get_object_version("dir/file.txt", "v1")
 
         self.assertEqual(b"old content", content)
-        self.assertEqual([{"bucket_name": "test-bucket", "object_name": "dir/file.txt", "version_id": "v1"}], self.mock_client.get_object_calls)
+        self.assertEqual([{"bucket_name": "test-bucket", "object_name": "dir/file.txt", "version_id": "v1"}], self.mock_client.stat_object_calls)
+        self.assertEqual(
+            [
+                {
+                    "bucket_name": "test-bucket",
+                    "object_name": "dir/file.txt",
+                    "offset": 0,
+                    "length": len(b"old content"),
+                    "request_headers": {"If-Match": '"etag-v1"'},
+                    "version_id": "v1",
+                }
+            ],
+            self.mock_client.get_object_calls,
+        )
 
     def test_get_object_version_requires_string_version_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "version_id must be str"):
