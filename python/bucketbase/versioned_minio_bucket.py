@@ -49,8 +49,15 @@ class VersionedMinioBucket(MinioBucket):
         return sstream(listing_itr).filter(lambda obj: self._get_object_name(obj) == _name).map(self._to_object_version).to_list()
 
     def get_object_version(self, name: PurePosixPath | str, version_id: str) -> bytes:
-        with self.get_object_version_stream(name, version_id) as response:
-            return response.read()
+        _name = self._validate_name(name)
+        validate(isinstance(version_id, str), f"version_id must be str, but got {type(version_id)}", exc=ValueError)
+
+        try:
+            return self._read_object(_name, version_id=version_id)
+        except minio.error.S3Error as exc:
+            if exc.code in ("MethodNotAllowed", "NoSuchKey", "NoSuchVersion"):
+                raise FileNotFoundError(f"Object {_name} version {version_id} not found in bucket {self._bucket_name} on Minio") from exc
+            raise
 
     def get_object_version_stream(self, name: PurePosixPath | str, version_id: str) -> ObjectStream:
         _name = self._validate_name(name)

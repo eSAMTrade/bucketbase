@@ -256,6 +256,7 @@ class IBucket(PydanticStrictValidated, ABC):
         :return: ObjectStream instance for reading the content
         :raises FileNotFoundError: If the object is not found
         :raises ValueError: If name is invalid
+        :raises OSError: If reading fails, including when the object changes while the stream is open
         """
         raise NotImplementedError()
 
