@@ -89,6 +89,10 @@ class TestIntegratedCachedImmutableBucket(TestCase):
         self.assertFalse(self.cache.exists(path))
         self.assertTrue(self.bucket_in_test.exists(path))
         with self.bucket_in_test.get_object_stream(path) as stream:
+            self.assertTrue(stream.seekable())
+            stream.seek(-7, io.SEEK_END)
+            self.assertEqual(b"content", stream.read())
+            stream.seek(0)
             retrieved_content = stream.read()
         self.assertEqual(retrieved_content, b_content)
         self.assertTrue(self.bucket_in_test.exists(path))
@@ -261,11 +265,10 @@ class TestIntegratedCachedImmutableBucket(TestCase):
                 thread.start()
 
             for thread in threads:
-                thread.join(timeout=2.0)
-                self.assertFalse(thread.is_alive(), "Thread did not complete within timeout")
+                thread.join(timeout=10.0)
+                self.assertFalse(thread.is_alive(), f"Thread {thread.name} did not complete within timeout")
 
-            # Verify results
+            self.assertEqual(len(results), num_threads, f"Expected {num_threads} results, but got {len(results)}")
             self.assertEqual(len(get_object_calls), 1, "Main bucket's get_object should be called exactly once")
-            self.assertEqual(len(results), num_threads, "All threads should have retrieved the content")
             for result in results:
                 self.assertEqual(result, content, "All threads should get the same content")

@@ -206,3 +206,4 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+**/.bucketbase.fscache*/

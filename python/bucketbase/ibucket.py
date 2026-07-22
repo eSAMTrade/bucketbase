@@ -249,12 +249,14 @@ class IBucket(PydanticStrictValidated, ABC):
     @abstractmethod
     def get_object_stream(self, name: PurePosixPath | str) -> ObjectStream:
         """
-        Retrieves a stream for reading the object's content.
+        Retrieves a readable, seekable stream for the object's content.
+        The yielded stream supports read(), readinto(), seek(), tell(), readable(), and seekable().
 
         :param name: Name of the object to retrieve
         :return: ObjectStream instance for reading the content
         :raises FileNotFoundError: If the object is not found
         :raises ValueError: If name is invalid
+        :raises OSError: If reading fails, including when the object changes while the stream is open
         """
         raise NotImplementedError()
 
@@ -477,7 +479,6 @@ class AbstractAppendOnlySynchronizedBucket(IBucket, ABC):
         self._lock_object(name)
         try:
             if self._base_bucket.exists(name):
-                self._unlock_object(name)
                 raise FileExistsError(f"Object {name} already exists in AppendOnlySynchronizedBucket")
                 # we assume that the put_object_stream operation is atomic
             self._base_bucket.put_object_stream(name, stream)
