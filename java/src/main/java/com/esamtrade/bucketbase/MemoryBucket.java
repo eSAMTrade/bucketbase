@@ -1,6 +1,5 @@
 package com.esamtrade.bucketbase;
 
-import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -57,7 +56,7 @@ public class MemoryBucket extends BaseBucket {
     @Override
     public ObjectStream getObjectStream(PurePosixPath name) throws FileNotFoundException {
         byte[] content = getObject(name);
-        return new ObjectStream(new ByteArrayInputStream(content), name.toString());
+        return new ObjectStream(new RangeSeekableInputStream(content.length, 0, (offset, length) -> Arrays.copyOfRange(content, Math.toIntExact(offset), Math.toIntExact(offset) + length)), name.toString());
     }
 
     @Override

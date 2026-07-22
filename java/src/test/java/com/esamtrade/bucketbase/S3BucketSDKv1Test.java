@@ -41,6 +41,11 @@ class S3BucketSDKv1Test {
     }
 
     @Test
+    void getObjectStreamIsSeekable() throws IOException {
+        tester.testGetObjectStreamIsSeekable();
+    }
+
+    @Test
     void getListObjects() throws IOException {
         tester.testListObjects();
     }

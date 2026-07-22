@@ -111,6 +111,28 @@ public class IBucketTester {
         assertThrows(FileNotFoundException.class, () -> storage.getObjectStream(nonExistentPath));
     }
 
+    public void testGetObjectStreamIsSeekable() throws IOException {
+        String uniqueDir = "dir" + uniqueSuffix;
+        PurePosixPath path = PurePosixPath.from(uniqueDir, "seekable.bin");
+        byte[] content = "0123456789abcdefghijklmnopqrstuvwxyz".getBytes();
+        storage.putObject(path, content);
+
+        try (ObjectStream objectStream = storage.getObjectStream(path)) {
+            SeekableInputStream stream = objectStream.getStream();
+            assertEquals(content.length, stream.size());
+            assertArrayEquals("0123".getBytes(), stream.readNBytes(4));
+            stream.seek(10);
+            assertArrayEquals("abcd".getBytes(), stream.readNBytes(4));
+            stream.seek(stream.position() - 2);
+            assertArrayEquals("cd".getBytes(), stream.readNBytes(2));
+            stream.seek(stream.size() - 4);
+            assertArrayEquals("wxyz".getBytes(), stream.readNBytes(4));
+            stream.seek(stream.size() + 10);
+            assertEquals(-1, stream.read());
+            assertThrows(IOException.class, () -> stream.seek(-1));
+        }
+    }
+
     public void testListObjects() throws IOException {
         String uniqueDir = "dir" + uniqueSuffix;
         storage.putObject(PurePosixPath.from(uniqueDir, "file1.txt"), "Content 1".getBytes());

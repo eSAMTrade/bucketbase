@@ -26,6 +26,9 @@ public interface IBucket {
 
     byte[] getObject(PurePosixPath name) throws IOException;
 
+    /**
+     * Returns a readable stream that supports querying its position and seeking to any non-negative offset.
+     */
     ObjectStream getObjectStream(PurePosixPath name) throws IOException;
 
     List<PurePosixPath> listObjects(PurePosixPath prefix) throws IOException;

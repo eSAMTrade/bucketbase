@@ -4,8 +4,8 @@ import org.apache.commons.codec.digest.DigestUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.core.sync.ResponseTransformer;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -24,20 +24,34 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 public class S3Bucket extends BaseBucket {
+    public static final int DEFAULT_READ_BUFFER_SIZE = 128 * 1024;
 
     protected S3Client s3Client;
     protected S3AsyncClient s3AsyncClient;
     protected String bucketName;
+    protected int readBufferSize;
 
 
     public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName) {
+        this(s3Client, s3AsyncClient, bucketName, DEFAULT_READ_BUFFER_SIZE);
+    }
+
+    public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName, int readBufferSize) {
+        if (readBufferSize < 0) {
+            throw new IllegalArgumentException("readBufferSize must be non-negative");
+        }
         this.s3Client = s3Client;
         this.s3AsyncClient = s3AsyncClient;
         this.bucketName = bucketName;
+        this.readBufferSize = readBufferSize;
     }
 
     public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName) {
-        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName);
+        this(endpoint, accessKey, secretKey, bucketName, DEFAULT_READ_BUFFER_SIZE);
+    }
+
+    public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName, int readBufferSize) {
+        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName, readBufferSize);
     }
 
     private static S3Client createS3Client(String endpoint, String accessKey, String secretKey) {
@@ -140,28 +154,45 @@ public class S3Bucket extends BaseBucket {
 
     @Override
     public byte[] getObject(PurePosixPath name) throws IOException {
-        try {
-            GetObjectRequest request = GetObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(name.toString())
-                    .build();
-            return s3Client.getObjectAsBytes(request).asByteArray();
-        } catch (NoSuchKeyException e) {
-            throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+        try (ObjectStream objectStream = getObjectStream(name)) {
+            return objectStream.getStream().readAllBytes();
         }
     }
 
     @Override
     public ObjectStream getObjectStream(PurePosixPath name) throws IOException {
+        String objectName = validateName(name);
         try {
-            GetObjectRequest request = GetObjectRequest.builder()
+            HeadObjectResponse metadata = s3Client.headObject(HeadObjectRequest.builder()
                     .bucket(bucketName)
-                    .key(name.toString())
-                    .build();
-            InputStream inputStream = s3Client.getObject(request, ResponseTransformer.toInputStream());
-            return new ObjectStream(inputStream, name.toString());
-        } catch (NoSuchKeyException e) {
-            throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+                    .key(objectName)
+                    .build());
+            SeekableInputStream stream = new RangeSeekableInputStream(
+                    metadata.contentLength(),
+                    readBufferSize,
+                    (offset, length) -> readRange(objectName, metadata.eTag(), offset, length)
+            );
+            return new ObjectStream(stream, objectName);
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+            }
+            throw e;
+        }
+    }
+
+    private byte[] readRange(String objectName, String eTag, long offset, int length) throws IOException {
+        GetObjectRequest.Builder request = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(objectName)
+                .range("bytes=" + offset + "-" + (offset + length - 1));
+        if (eTag != null) {
+            request.ifMatch(eTag);
+        }
+        try (ResponseInputStream<GetObjectResponse> response = s3Client.getObject(request.build())) {
+            return response.readAllBytes();
+        } catch (S3Exception e) {
+            throw new IOException("Failed to read object " + objectName + " range at offset " + offset + " with length " + length, e);
         }
     }
 

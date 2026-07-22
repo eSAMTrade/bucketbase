@@ -2,18 +2,20 @@ package com.esamtrade.bucketbase;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
 
 public class ObjectStream implements AutoCloseable {
-    private final InputStream stream;
+    private final SeekableInputStream stream;
     private final String name;
 
     public ObjectStream(InputStream stream, String name) {
-        this.stream = stream;
+        if (!(stream instanceof SeekableInputStream seekableStream)) {
+            throw new IllegalArgumentException("Object streams must be seekable");
+        }
+        this.stream = seekableStream;
         this.name = name;
     }
 
-    public InputStream getStream() {
+    public SeekableInputStream getStream() {
         return stream;
     }
 

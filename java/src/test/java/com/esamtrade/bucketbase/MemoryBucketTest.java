@@ -32,6 +32,11 @@ class MemoryBucketTest {
     }
 
     @Test
+    void getObjectStreamIsSeekable() throws IOException {
+        tester.testGetObjectStreamIsSeekable();
+    }
+
+    @Test
     void getListObjects() throws IOException {
         tester.testListObjects();
     }
