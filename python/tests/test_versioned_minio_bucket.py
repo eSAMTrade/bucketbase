@@ -13,7 +13,6 @@ from minio.helpers import DictType
 from minio.sse import SseCustomerKey
 from minio.versioningconfig import ENABLED, VersioningConfig
 from streamerate import slist
-from typing_extensions import override
 from urllib3 import HTTPResponse
 
 from bucketbase.minio_bucket import build_minio_client
@@ -106,13 +105,13 @@ class MockVersionedMinioClient(Minio):
         self.list_objects_calls: list[dict[str, object]] = []
         self.get_object_calls: list[dict[str, object]] = []
         self.stat_object_calls: list[dict[str, object]] = []
+        self.responses: list[HTTPResponse] = []
         self.remove_objects_calls: list[tuple[str, list[DeleteObject]]] = []
 
     def list_objects(self, **kwargs: object) -> Iterator[Object]:
         self.list_objects_calls.append(kwargs)
         return iter(self.list_objects_response)
 
-    @override
     @ai_blackbox()
     def stat_object(
         self,
@@ -130,7 +129,6 @@ class MockVersionedMinioClient(Minio):
         content = self.content_by_version[version_id]
         return Object(bucket_name, object_name, etag=f"etag-{version_id}", size=len(content), version_id=version_id)
 
-    @override
     @ai_blackbox()
     def get_object(
         self,
@@ -156,14 +154,15 @@ class MockVersionedMinioClient(Minio):
         if self.get_object_error is not None:
             raise self.get_object_error
         content = self.content_by_version[version_id]
-        return self._make_response(content[offset : offset + length] if length else content[offset:])
+        response = self._make_response(content[offset : offset + length] if length else content[offset:])
+        self.responses.append(response)
+        return response
 
     @staticmethod
     @ai_blackbox()
     def _make_response(content: bytes) -> HTTPResponse:
         return HTTPResponse(body=io.BytesIO(content), headers={"content-length": str(len(content))}, preload_content=False)
 
-    @override
     def remove_objects(self, bucket_name: str, delete_object_list: Iterable[DeleteObject], bypass_governance_mode: bool = False) -> Iterator[DeleteError]:
         self.remove_objects_calls.append((bucket_name, list(delete_object_list)))
         return iter(self.remove_errors)
@@ -175,7 +174,7 @@ class TestVersionedMinioBucket(TestCase):
         self.bucket = VersionedMinioBucket(bucket_name="test-bucket", minio_client=self.mock_client)
 
     @staticmethod
-    def _make_object(name: str, version_id: str | None, is_latest: str = "false", is_delete_marker: bool = False) -> Object:
+    def _make_object(name: str, version_id: str | None, is_latest: str | bool = "false", is_delete_marker: bool = False) -> Object:
         return Object(
             bucket_name="test-bucket",
             object_name=name,
@@ -221,24 +220,25 @@ class TestVersionedMinioBucket(TestCase):
         content = self.bucket.get_object_version("dir/file.txt", "v1")
 
         self.assertEqual(b"old content", content)
-        self.assertEqual([{"bucket_name": "test-bucket", "object_name": "dir/file.txt", "version_id": "v1"}], self.mock_client.stat_object_calls)
+        self.assertEqual([], self.mock_client.stat_object_calls)
         self.assertEqual(
             [
                 {
                     "bucket_name": "test-bucket",
                     "object_name": "dir/file.txt",
                     "offset": 0,
-                    "length": len(b"old content"),
-                    "request_headers": {"If-Match": '"etag-v1"'},
+                    "length": 0,
+                    "request_headers": None,
                     "version_id": "v1",
                 }
             ],
             self.mock_client.get_object_calls,
         )
+        self.assertTrue(self.mock_client.responses[0].closed)
 
     def test_get_object_version_requires_string_version_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "version_id must be str"):
-            self.bucket.get_object_version("dir/file.txt", None)  # type: ignore[arg-type]
+            self.bucket.get_object_version("dir/file.txt", None)
 
     def test_get_object_version_missing_version_raises_file_not_found(self) -> None:
         self.mock_client.get_object_error = self._make_s3_error("NoSuchVersion")

@@ -88,19 +88,26 @@ class _MinioRangeReader(io.RawIOBase):
                 return b""
 
             request_headers: DictType | None = {"If-Match": f'"{self._etag}"'} if self._etag else None
-            response = self._minio_client.get_object(
-                self._bucket_name,
-                self._object_name,
-                offset=self._position,
-                length=length,
-                request_headers=request_headers,
-                version_id=self._version_id,
-            )
             try:
-                data = response.read()
-            finally:
-                response.close()
-                response.release_conn()
+                response = self._minio_client.get_object(
+                    self._bucket_name,
+                    self._object_name,
+                    offset=self._position,
+                    length=length,
+                    request_headers=request_headers,
+                    version_id=self._version_id,
+                )
+                try:
+                    data = response.read()
+                finally:
+                    try:
+                        response.close()
+                    finally:
+                        response.release_conn()
+            except minio.error.S3Error as exc:
+                if exc.code == "PreconditionFailed":
+                    raise OSError(f"Object {self._object_name} changed while the stream was open") from exc
+                raise
 
             if len(data) != length:
                 raise IOError(f"Expected {length} bytes from {self._object_name} at offset {self._position}, but received {len(data)}")
@@ -253,8 +260,24 @@ class MinioBucket(IBucket):
         return object_name
 
     def get_object(self, name: PurePosixPath | str) -> bytes:
-        with self.get_object_stream(name) as response:
+        _name = self._validate_name(name)
+        try:
+            return self._read_object(_name)
+        except minio.error.S3Error as exc:
+            if exc.code == "NoSuchKey":
+                raise FileNotFoundError(f"Object {_name} not found in bucket {self._bucket_name} on Minio") from exc
+            raise
+
+    @ai_blackbox()
+    def _read_object(self, name: str, *, version_id: str | None = None) -> bytes:
+        response = self._minio_client.get_object(self._bucket_name, name, version_id=version_id)
+        try:
             return response.read()
+        finally:
+            try:
+                response.close()
+            finally:
+                response.release_conn()
 
     @ai_blackbox()
     def _open_object_stream(self, name: str, *, version_id: str | None = None) -> ObjectStream:

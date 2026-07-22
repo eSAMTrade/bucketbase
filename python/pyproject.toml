@@ -1,6 +1,6 @@
 [project]
 name = "bucketbase"
-version = "1.7.0"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
+version = "1.7.1"  # do not edit manually. kept in sync with `tool.commitizen` config via automation
 description = "bucketbase"
 authors = [{ name = "Andrei Suiu", email = "andrei.suiu@gmail.com" }]
 readme = "README.py.md"
