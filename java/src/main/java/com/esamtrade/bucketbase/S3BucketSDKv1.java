@@ -1,5 +1,6 @@
 package com.esamtrade.bucketbase;
 
+import com.amazonaws.SdkClientException;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.client.builder.AwsClientBuilder;
@@ -82,6 +83,19 @@ public class S3BucketSDKv1 extends BaseBucket {
         return new ObjectStream(inputStream, name.toString());
     }
 
+    @Override
+    public long getSize(PurePosixPath name) throws IOException {
+        try {
+            return s3Client.getObjectMetadata(bucketName, name.toString()).getContentLength();
+        }
+        catch (AmazonS3Exception e) {
+            if (e.getStatusCode() == 404)
+                throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+            throw new IOException("Failed to get object metadata: " + e.getMessage(), e);
+        } catch (SdkClientException e) {
+            throw new IOException("Failed to get object metadata: " + e.getMessage(), e);
+        }
+    }
 
     /**
      * Retrieves a list of object paths stored in the bucket that match the given prefix.
