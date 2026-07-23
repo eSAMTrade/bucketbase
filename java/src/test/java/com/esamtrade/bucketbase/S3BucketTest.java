@@ -1,27 +1,30 @@
 package com.esamtrade.bucketbase;
 
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import java.io.IOException;
 
+/**
+ * Functional tests against a live S3-compatible service. Endpoint and credentials come from
+ * {@link TestConfig}, which defaults to the public MinIO playground so this runs without any
+ * private secrets. Set {@code BUCKETBASE_SKIP_FUNCTIONAL_TESTS=1} to skip in offline builds.
+ */
+@EnabledIf("com.esamtrade.bucketbase.TestConfig#functionalTestsEnabled")
 class S3BucketTest {
 
     private S3Bucket bucket;
     private IBucketTester tester;
 
-    @BeforeAll
-    public static void setUpClass() {
-
-    }
-
     @BeforeEach
     public void setUp() {
-        String accessKey = System.getenv("MINIO_ACCESS_KEY");
-        String secretKey = System.getenv("MINIO_SECRET_KEY");
-        bucket = new S3Bucket("https://minio.esamtrade.vlada.ro", accessKey, secretKey, "minio-dev-tests");
+        bucket = new S3Bucket(
+                TestConfig.MINIO_ENDPOINT,
+                TestConfig.MINIO_ACCESS_KEY,
+                TestConfig.MINIO_SECRET_KEY,
+                TestConfig.MINIO_BUCKET);
         tester = new IBucketTester(bucket);
     }
 

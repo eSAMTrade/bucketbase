@@ -26,8 +26,7 @@ class S3BucketRangeTest {
         FakeS3Client client = new FakeS3Client(content);
         S3Bucket bucket = new S3Bucket(client, null, "test-bucket", 8);
 
-        try (ObjectStream objectStream = bucket.getObjectStream(PurePosixPath.from("object.bin"))) {
-            SeekableInputStream stream = objectStream.getStream();
+        try (SeekableInputStream stream = bucket.getObjectStream(PurePosixPath.from("object.bin"))) {
             stream.seek(5);
             assertArrayEquals("56".getBytes(), stream.readNBytes(2));
             stream.seek(8);

@@ -22,11 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class IBucketTester {
 
     private static final List<String> INVALID_PREFIXES = List.of("/", "/dir", "star*1", "dir1/a\\file.txt", "at@gmail", "sharp#1", "dollar$1", "comma,");
-    private final BaseBucket storage;
+    private final IBucket storage;
     private final String uniqueSuffix;
     private final String PATH_WITH_2025_KEYS = "test-dir-with-2025-keys/";
 
-    public IBucketTester(BaseBucket storage) {
+    public IBucketTester(IBucket storage) {
         this.storage = storage;
         // Generate a unique suffix to be used in the names of dirs and files
         this.uniqueSuffix = String.format("%08d", System.currentTimeMillis() % 100_000_000);
@@ -85,8 +85,8 @@ public class IBucketTester {
         ByteArrayInputStream gzippedStream = new ByteArrayInputStream(byteStream.toByteArray());
 
         storage.putObjectStream(path, gzippedStream);
-        try (ObjectStream file = storage.getObjectStream(path)) {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file.getStream())))) {
+        try (SeekableInputStream file = storage.getObjectStream(path)) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file)))) {
                 String[] result = new String[3];
                 for (int i = 0; i < 3; i++) {
                     result[i] = reader.readLine();
@@ -97,8 +97,8 @@ public class IBucketTester {
 
         // String path
         path = PurePosixPath.from(uniqueDir, "file1.bin");
-        try (ObjectStream file = storage.getObjectStream(path)) {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file.getStream())))) {
+        try (SeekableInputStream file = storage.getObjectStream(path)) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file)))) {
                 char[] cbuf = new char[100];
                 int readCount = reader.read(cbuf, 0, 100);
                 String result = new String(cbuf, 0, readCount);
@@ -117,8 +117,7 @@ public class IBucketTester {
         byte[] content = "0123456789abcdefghijklmnopqrstuvwxyz".getBytes();
         storage.putObject(path, content);
 
-        try (ObjectStream objectStream = storage.getObjectStream(path)) {
-            SeekableInputStream stream = objectStream.getStream();
+        try (SeekableInputStream stream = storage.getObjectStream(path)) {
             assertEquals(content.length, stream.size());
             assertArrayEquals("0123".getBytes(), stream.readNBytes(4));
             stream.seek(10);
@@ -200,8 +199,8 @@ public class IBucketTester {
         var pathWith2025Keys = ensureDirWith2025Keys();
 
         ShallowListing objects = storage.shallowListObjects(pathWith2025Keys);
-        assertEquals(2025, objects.getObjects().size());
-        assertEquals(0, objects.getPrefixes().size());
+        assertEquals(2025, objects.objects().size());
+        assertEquals(0, objects.prefixes().size());
     }
 
     public void testShallowListObjects() throws IOException {
@@ -216,16 +215,14 @@ public class IBucketTester {
         ShallowListing objects = storage.shallowListObjects(new PurePosixPath(uniqueDir + "/"));
         List<PurePosixPath> expectedObjects = List.of(PurePosixPath.from(uniqueDir + "/file1.txt"));
         List<PurePosixPath> expectedPrefixes = List.of(PurePosixPath.from(uniqueDir + "/dir2/"));
-        assertIterableEquals(expectedObjects, objects.getObjects());
-        assertIterableEquals(expectedPrefixes, objects.getPrefixes());
+        assertIterableEquals(expectedObjects, objects.objects());
+        assertIterableEquals(expectedPrefixes, objects.prefixes());
 
         ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPath(uniqueDir));
         expectedObjects = List.of(new PurePosixPath(uniqueDir + "file1.txt"));
         expectedPrefixes = List.of(PurePosixPath.from(uniqueDir + "/"));
-        assertTrue(shallowListing.getObjects() instanceof List);
-        assertTrue(shallowListing.getPrefixes() instanceof List);
-        assertIterableEquals(expectedObjects, shallowListing.getObjects());
-        assertIterableEquals(expectedPrefixes, shallowListing.getPrefixes());
+        assertIterableEquals(expectedObjects, shallowListing.objects());
+        assertIterableEquals(expectedPrefixes, shallowListing.prefixes());
 
         // Invalid Prefix cases
         for (String prefix : INVALID_PREFIXES) {
@@ -264,7 +261,7 @@ public class IBucketTester {
 
         // Check that the leftover empty directories are also removed, but the bucket may contain leftovers from the other test runs
         ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPath(""));
-        List<PurePosixPath> prefixes = shallowListing.getPrefixes();
+        List<PurePosixPath> prefixes = shallowListing.prefixes();
         assertFalse(prefixes.contains(uniqueDir + "/"));
     }
 }

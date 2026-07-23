@@ -2,7 +2,6 @@ package com.esamtrade.bucketbase;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -47,7 +46,7 @@ class RangeSeekableInputStreamTest {
     }
 
     @Test
-    void largeReadIsNotEnlargedByBuffering() throws IOException {
+    void largeReadIsFilledDirectlyWithoutEnlargement() throws IOException {
         byte[] content = "0123456789abcdefghijklmnopqrstuvwxyz".getBytes();
         List<RangeCall> calls = new ArrayList<>();
         RangeSeekableInputStream stream = createStream(content, 8, calls);
@@ -58,11 +57,41 @@ class RangeSeekableInputStreamTest {
     }
 
     @Test
-    void shortRangeAndClosedStreamFailClearly() throws IOException {
-        RangeSeekableInputStream shortStream = new RangeSeekableInputStream(10, 0, (offset, length) -> new byte[length - 1]);
-        assertThrows(IOException.class, () -> shortStream.readNBytes(10));
+    void markAndResetRestorePosition() throws IOException {
+        byte[] content = "0123456789".getBytes();
+        RangeSeekableInputStream stream = createStream(content, 0, new ArrayList<>());
 
-        RangeSeekableInputStream closedStream = new RangeSeekableInputStream(10, 0, (offset, length) -> new byte[length]);
+        stream.seek(2);
+        stream.mark(0);
+        assertArrayEquals("234".getBytes(), stream.readNBytes(3));
+        stream.reset();
+        assertArrayEquals("234".getBytes(), stream.readNBytes(3));
+    }
+
+    @Test
+    void availableReportsOnlyBufferedBytes() throws IOException {
+        byte[] content = "0123456789abcdef".getBytes();
+        RangeSeekableInputStream stream = createStream(content, 8, new ArrayList<>());
+
+        // Nothing prefetched yet: no bytes are readable without a fetch.
+        assertEquals(0, stream.available());
+        stream.read();
+        // One 8-byte range is now buffered; 7 remain ahead of the position.
+        assertEquals(7, stream.available());
+    }
+
+    @Test
+    void aFailingRangeReaderPropagates() {
+        RangeSeekableInputStream stream = new RangeSeekableInputStream(10, 0,
+                (offset, dest, destOffset, length) -> {
+                    throw new IOException("boom");
+                });
+        assertThrows(IOException.class, () -> stream.readNBytes(10));
+    }
+
+    @Test
+    void closedStreamRejectsOperations() throws IOException {
+        RangeSeekableInputStream closedStream = createStream(new byte[10], 0, new ArrayList<>());
         closedStream.close();
         assertThrows(IOException.class, closedStream::read);
         assertThrows(IOException.class, () -> closedStream.seek(0));
@@ -71,18 +100,19 @@ class RangeSeekableInputStreamTest {
 
     @Test
     void invalidSizesAndNegativeSeekAreRejected() throws IOException {
-        assertThrows(IllegalArgumentException.class, () -> new RangeSeekableInputStream(-1, 0, (offset, length) -> new byte[length]));
-        assertThrows(IllegalArgumentException.class, () -> new RangeSeekableInputStream(1, -1, (offset, length) -> new byte[length]));
+        assertThrows(IllegalArgumentException.class,
+                () -> new RangeSeekableInputStream(-1, 0, (offset, dest, destOffset, length) -> {}));
+        assertThrows(IllegalArgumentException.class,
+                () -> new RangeSeekableInputStream(1, -1, (offset, dest, destOffset, length) -> {}));
 
-        RangeSeekableInputStream stream = new RangeSeekableInputStream(1, 0, (offset, length) -> new byte[length]);
+        RangeSeekableInputStream stream = createStream(new byte[1], 0, new ArrayList<>());
         assertThrows(IOException.class, () -> stream.seek(-1));
-        assertThrows(IllegalArgumentException.class, () -> new ObjectStream(new ByteArrayInputStream(new byte[1]), "object.bin"));
     }
 
     private static RangeSeekableInputStream createStream(byte[] content, int readBufferSize, List<RangeCall> calls) {
-        return new RangeSeekableInputStream(content.length, readBufferSize, (offset, length) -> {
+        return new RangeSeekableInputStream(content.length, readBufferSize, (offset, dest, destOffset, length) -> {
             calls.add(new RangeCall(offset, length));
-            return Arrays.copyOfRange(content, Math.toIntExact(offset), Math.toIntExact(offset) + length);
+            System.arraycopy(content, Math.toIntExact(offset), dest, destOffset, length);
         });
     }
 }

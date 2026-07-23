@@ -7,8 +7,10 @@ import java.util.*;
 
 public class PurePosixPath implements Comparable<PurePosixPath> {
 
+    // static: the one canonical separator constant for the library (was a per-instance field;
+    // IBucket.SEP was removed in favour of this one).
+    public static final String SEP = "/";
     protected final String[] parts;
-    public final String SEP = "/";
 
     public static PurePosixPath from(String path, String... more) {
         return new PurePosixPath(path, more);
@@ -88,16 +90,21 @@ public class PurePosixPath implements Comparable<PurePosixPath> {
     }
 
     public PurePosixPath parent() {
-        int i = parts.length - 1;
-        if (i < 0) {
+        boolean absolute = isAbsolute();
+        // Ignore a single trailing "" (from a trailing slash) when locating the last component.
+        int end = parts.length;
+        if (end > 1 && parts[end - 1].isEmpty()) {
+            end--;
+        }
+        int namedCount = end - (absolute ? 1 : 0);
+        if (namedCount <= 1) {
+            // "/x".parent() is the root "/"; the root and "" and bare relative names have no parent.
+            if (namedCount == 1 && absolute) {
+                return new PurePosixPath(new String[]{"", ""});
+            }
             throw new IllegalArgumentException("Path " + this + " has no parent");
         }
-        if (parts[i].isEmpty())
-            --i;
-        if (parts[i].isEmpty())
-            throw new IllegalArgumentException("Path " + this + " has no parent");
-        String[] parentParts = Arrays.copyOf(parts, i);
-        return new PurePosixPath(parentParts);
+        return new PurePosixPath(Arrays.copyOf(parts, end - 1));
     }
 
     public String name() {
@@ -201,8 +208,16 @@ public class PurePosixPath implements Comparable<PurePosixPath> {
 
     @Override
     public int compareTo(PurePosixPath other) {
-        String thisStr = this.toString();
-        String otherStr = other.toString();
-        return thisStr.compareTo(otherStr);
+        // Compare component-wise so the ordering is consistent with equals()/hashCode(), which
+        // are defined over `parts`. A toString()-based comparison is not: distinct part arrays
+        // can render to the same string, which would break TreeMap/TreeSet/binarySearch.
+        int shared = Math.min(parts.length, other.parts.length);
+        for (int i = 0; i < shared; i++) {
+            int c = parts[i].compareTo(other.parts[i]);
+            if (c != 0) {
+                return c;
+            }
+        }
+        return Integer.compare(parts.length, other.parts.length);
     }
 }

@@ -11,6 +11,7 @@ import com.amazonaws.services.s3.model.DeleteObjectsResult;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.ListObjectsV2Request;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.MultiObjectDeleteException;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3Object;
@@ -23,32 +24,43 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * S3BucketSDKv1 is a class that provides methods to interact with an S3 bucket.
- * It extends the BaseBucket class and uses the old AWS SDK v1 for Java
+ * It uses the old AWS SDK v1 for Java, kept for compatibility with SDK-v1 consumers.
  */
-public class S3BucketSDKv1 extends BaseBucket {
+public class S3BucketSDKv1 implements IBucket {
     public static final int DEFAULT_READ_BUFFER_SIZE = 128 * 1024;
+
+    private static final int DELETE_BATCH_SIZE = 1000;
 
     protected AmazonS3 s3Client;
     protected String bucketName;
     protected int readBufferSize;
+    /** Whether this instance created the client (and must therefore shut it down). */
+    private boolean ownsClient;
 
     public S3BucketSDKv1(String endpoint, String accessKey, String secretKey, String bucketName) {
         this(endpoint, accessKey, secretKey, bucketName, DEFAULT_READ_BUFFER_SIZE);
     }
 
+    /** Default signing region, matching {@link S3Bucket}. S3-compatible services generally ignore it. */
+    public static final String DEFAULT_REGION = "us-east-1";
+
     public S3BucketSDKv1(String endpoint, String accessKey, String secretKey, String bucketName, int readBufferSize) {
+        this(endpoint, accessKey, secretKey, bucketName, readBufferSize, DEFAULT_REGION);
+    }
+
+    public S3BucketSDKv1(String endpoint, String accessKey, String secretKey, String bucketName, int readBufferSize, String region) {
         BasicAWSCredentials awsCreds = new BasicAWSCredentials(accessKey, secretKey);
+        // The signing region must be a real region name: an empty string produces a signature
+        // that S3-compatible servers reject with AuthorizationHeaderMalformed.
         AmazonS3 client = AmazonS3ClientBuilder.standard()
-                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, ""))
+                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, region))
                 .withCredentials(new AWSStaticCredentialsProvider(awsCreds))
                 .withPathStyleAccessEnabled(true)
                 .build();
-        initialize(client, bucketName, readBufferSize);
+        initialize(client, bucketName, readBufferSize, true);
     }
 
     public S3BucketSDKv1(AmazonS3 s3Client, String bucketName) {
@@ -56,49 +68,51 @@ public class S3BucketSDKv1 extends BaseBucket {
     }
 
     public S3BucketSDKv1(AmazonS3 s3Client, String bucketName, int readBufferSize) {
-        initialize(s3Client, bucketName, readBufferSize);
+        initialize(s3Client, bucketName, readBufferSize, false);
     }
 
-    private void initialize(AmazonS3 s3Client, String bucketName, int readBufferSize) {
+    private void initialize(AmazonS3 s3Client, String bucketName, int readBufferSize, boolean ownsClient) {
         if (readBufferSize < 0) {
             throw new IllegalArgumentException("readBufferSize must be non-negative");
         }
         this.s3Client = s3Client;
         this.bucketName = bucketName;
         this.readBufferSize = readBufferSize;
+        this.ownsClient = ownsClient;
     }
 
     @Override
     public void putObject(PurePosixPath name, byte[] content) {
+        String _name = S3Names.validateName(name);
         ObjectMetadata metadata = new ObjectMetadata();
         metadata.setContentLength(content.length);
-        s3Client.putObject(bucketName, name.toString(), new ByteArrayInputStream(content), metadata);
+        s3Client.putObject(bucketName, _name, new ByteArrayInputStream(content), metadata);
     }
 
     @Override
     public void putObjectStream(PurePosixPath name, InputStream stream) {
+        String _name = S3Names.validateName(name);
         ObjectMetadata metadata = new ObjectMetadata();
-        s3Client.putObject(bucketName, name.toString(), stream, metadata);
+        s3Client.putObject(bucketName, _name, stream, metadata);
     }
 
     @Override
     public byte[] getObject(PurePosixPath name) throws IOException {
-        try (ObjectStream objectStream = getObjectStream(name)) {
-            return objectStream.getStream().readAllBytes();
+        try (SeekableInputStream stream = getObjectStream(name)) {
+            return stream.readAllBytes();
         }
     }
 
     @Override
-    public ObjectStream getObjectStream(PurePosixPath name) throws IOException {
-        String objectName = validateName(name);
+    public SeekableInputStream getObjectStream(PurePosixPath name) throws IOException {
+        String objectName = S3Names.validateName(name);
         try {
             ObjectMetadata metadata = s3Client.getObjectMetadata(bucketName, objectName);
-            SeekableInputStream stream = new RangeSeekableInputStream(
+            return new RangeSeekableInputStream(
                     metadata.getContentLength(),
                     readBufferSize,
-                    (offset, length) -> readRange(objectName, metadata.getETag(), offset, length)
+                    (offset, dest, destOffset, length) -> readRange(objectName, metadata.getETag(), offset, dest, destOffset, length)
             );
-            return new ObjectStream(stream, objectName);
         } catch (AmazonS3Exception e) {
             if (e.getStatusCode() != 404) {
                 throw e;
@@ -107,13 +121,35 @@ public class S3BucketSDKv1 extends BaseBucket {
         }
     }
 
-    private byte[] readRange(String objectName, String eTag, long offset, int length) throws IOException {
+    @Override
+    public long getSize(PurePosixPath name) throws IOException {
+        String objectName = S3Names.validateName(name);
+        try {
+            return s3Client.getObjectMetadata(bucketName, objectName).getContentLength();
+        } catch (AmazonS3Exception e) {
+            if (e.getStatusCode() != 404) {
+                throw e;
+            }
+            throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+        }
+    }
+
+    private void readRange(String objectName, String eTag, long offset, byte[] dest, int destOffset, int length) throws IOException {
         GetObjectRequest request = new GetObjectRequest(bucketName, objectName).withRange(offset, offset + length - 1);
         if (eTag != null) {
             request.withMatchingETagConstraint(eTag);
         }
-        try (S3ObjectInputStream inputStream = s3Client.getObject(request).getObjectContent()) {
-            return inputStream.readAllBytes();
+        // SDK v1 returns null (rather than throwing) when a precondition such as
+        // withMatchingETagConstraint is not met, so this must be checked before dereferencing.
+        S3Object object = s3Client.getObject(request);
+        if (object == null) {
+            throw new IOException("Object " + objectName + " changed while the stream was open");
+        }
+        try (S3Object closeable = object; S3ObjectInputStream inputStream = closeable.getObjectContent()) {
+            int read = inputStream.readNBytes(dest, destOffset, length);
+            if (read != length) {
+                throw new IOException("Expected " + length + " bytes at offset " + offset + " of " + objectName + ", but received " + read);
+            }
         } catch (AmazonS3Exception e) {
             throw new IOException("Failed to read object " + objectName + " range at offset " + offset + " with length " + length, e);
         }
@@ -130,12 +166,12 @@ public class S3BucketSDKv1 extends BaseBucket {
      */
     @Override
     public List<PurePosixPath> listObjects(PurePosixPath prefix) {
-        splitPrefix(prefix); // validate prefix
+        String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> result = new ArrayList<>();
-        ObjectListing objectListing = s3Client.listObjects(bucketName, prefix.toString());
+        ObjectListing objectListing = s3Client.listObjects(bucketName, validated);
         while (true) {
             for (S3ObjectSummary summary : objectListing.getObjectSummaries()) {
-                result.add(new PurePosixPath(summary.getKey()));
+                result.add(PurePosixPath.from(summary.getKey()));
             }
             if (!objectListing.isTruncated()) {
                 break;
@@ -147,17 +183,17 @@ public class S3BucketSDKv1 extends BaseBucket {
 
     @Override
     public ShallowListing shallowListObjects(PurePosixPath prefix) {
-        splitPrefix(prefix); // validate prefix
+        String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> objects = new ArrayList<>();
         List<PurePosixPath> prefixes = new ArrayList<>();
-        ListObjectsV2Request request = new ListObjectsV2Request().withBucketName(bucketName).withPrefix(prefix.toString()).withDelimiter(SEP);
+        ListObjectsV2Request request = new ListObjectsV2Request().withBucketName(bucketName).withPrefix(validated).withDelimiter(PurePosixPath.SEP);
         ListObjectsV2Result result;
         do {
             result = s3Client.listObjectsV2(request);
             for (S3ObjectSummary summary : result.getObjectSummaries()) {
-                objects.add(new PurePosixPath(summary.getKey()));
+                objects.add(PurePosixPath.from(summary.getKey()));
             }
-            prefixes.addAll(result.getCommonPrefixes().stream().map(PurePosixPath::new).toList());
+            prefixes.addAll(result.getCommonPrefixes().stream().map(PurePosixPath::from).toList());
             request.setContinuationToken(result.getNextContinuationToken());
         } while (result.isTruncated());
 
@@ -166,28 +202,40 @@ public class S3BucketSDKv1 extends BaseBucket {
 
     @Override
     public boolean exists(PurePosixPath name) {
-        String _name = validateName(name);
+        String _name = S3Names.validateName(name);
         return s3Client.doesObjectExist(bucketName, _name);
     }
 
+    /**
+     * Deletes objects in batches of 1000 (S3's per-request limit). Deleting a missing key is not
+     * an error; keys the server reports as failed are returned as {@link DeleteError}s. A partial
+     * failure raises {@link MultiObjectDeleteException} in SDK v1, whose per-key errors are
+     * collected rather than propagated.
+     */
     @Override
     public List<DeleteError> removeObjects(List<PurePosixPath> names) {
-        Set<String> namesSet = names.stream().map(BaseBucket::validateName).collect(Collectors.toSet());
-        List<DeleteObjectsRequest.KeyVersion> keys = new ArrayList<>();
-        for (PurePosixPath name : names) {
-            keys.add(new DeleteObjectsRequest.KeyVersion(name.toString()));
-        }
+        List<String> validated = names.stream().map(S3Names::validateName).toList();
         List<DeleteError> errors = new ArrayList<>();
-        if (!keys.isEmpty()) {
-            DeleteObjectsRequest request = new DeleteObjectsRequest(bucketName).withKeys(keys);
-            DeleteObjectsResult result = s3Client.deleteObjects(request);
-
-            for (DeleteObjectsResult.DeletedObject deleted : result.getDeletedObjects()) {
-                if (!namesSet.contains(deleted.getKey())) {
-                    errors.add(new DeleteError("Object not found: " + deleted.getKey()));
+        for (int i = 0; i < validated.size(); i += DELETE_BATCH_SIZE) {
+            List<String> batch = validated.subList(i, Math.min(i + DELETE_BATCH_SIZE, validated.size()));
+            List<DeleteObjectsRequest.KeyVersion> keys = batch.stream()
+                    .map(DeleteObjectsRequest.KeyVersion::new)
+                    .toList();
+            try {
+                s3Client.deleteObjects(new DeleteObjectsRequest(bucketName).withKeys(keys).withQuiet(true));
+            } catch (MultiObjectDeleteException e) {
+                for (MultiObjectDeleteException.DeleteError error : e.getErrors()) {
+                    errors.add(new DeleteError(error.getCode(), error.getMessage(), error.getKey()));
                 }
             }
         }
         return errors;
+    }
+
+    @Override
+    public void close() {
+        if (ownsClient) {
+            s3Client.shutdown();
+        }
     }
 }

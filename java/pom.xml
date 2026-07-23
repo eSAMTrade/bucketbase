@@ -4,31 +4,31 @@
 
     <groupId>com.esamtrade</groupId>
     <artifactId>bucketbase</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <description>BucketBase Java library for abstracting object storage solutions</description>
     <name>BucketBase</name>
-    <url>https://github.com/esamtrade/bucketbase</url>
+    <url>https://github.com/eSAMTrade/bucketbase</url>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.release>25</maven.compiler.release>
         <commons.io.version>2.16.1</commons.io.version>
         <aws.sdk.version.v2>2.30.36</aws.sdk.version.v2>
         <aws.sdk.version.v1>1.12.782</aws.sdk.version.v1>
         <junit.version>5.10.0</junit.version>
+        <trino.version>483</trino.version>
     </properties>
 
     <dependencies>
-        <!-- Common IO -->
+        <!-- Used by PurePosixPath, a core class every consumer touches, so it must be a normal
+             compile dependency: `provided` is not transitive. -->
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
             <version>${commons.io.version}</version>
-            <scope>provided</scope>
         </dependency>
 
-        <!-- AWS SDK v2 for S3 -->
+        <!-- AWS SDK v2 for S3. Optional: only consumers using S3Bucket need it on the classpath. -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
@@ -36,10 +36,10 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- AWS SDK v1 -->
+        <!-- AWS SDK v1. Optional: only consumers using S3BucketSDKv1 need it. -->
         <dependency>
             <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk</artifactId>
+            <artifactId>aws-java-sdk-s3</artifactId>
             <version>${aws.sdk.version.v1}</version>
             <optional>true</optional>
         </dependency>
@@ -51,39 +51,59 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Trino's Parquet reader/writer: a Hadoop-free Parquet implementation used to prove
+             that the seekable ranged stream supports real partial reads, column projection and
+             predicate pushdown. Test scope only - bucketbase itself has no Parquet dependency.
+             trino-spi is `provided` inside trino-parquet, so it must be declared explicitly. -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-parquet</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-spi</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
     <build>
         <plugins>
-            <!-- Maven Compiler Plugin -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <source>17</source>
-                    <target>17</target>
-                </configuration>
+                <version>3.13.0</version>
+                <!-- Compiles against maven.compiler.release (25); no source/target overrides. -->
             </plugin>
 
-            <!-- Source and Javadoc Jar creation -->
+            <!-- Sources jar (required by Maven Central) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.3.1</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
                         <phase>verify</phase>
                         <goals>
-                            <goal>jar</goal>
+                            <goal>jar-no-fork</goal>
                         </goals>
                     </execution>
                 </executions>
             </plugin>
+
+            <!-- Javadoc jar (required by Maven Central) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.11.2</version>
+                <configuration>
+                    <!-- Don't fail the release build on strict doclint nits. -->
+                    <doclint>none</doclint>
+                </configuration>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
@@ -95,11 +115,12 @@
                 </executions>
             </plugin>
 
-            <!-- GPG Signing -->
+            <!-- GPG signing (required by Maven Central). Passphrase is read from the
+                 MAVEN_GPG_PASSPHRASE environment variable; never pass it on the command line. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-gpg-plugin</artifactId>
-                <version>3.1.0</version>
+                <version>3.2.7</version>
                 <executions>
                     <execution>
                         <id>sign-artifacts</id>
@@ -108,60 +129,64 @@
                             <goal>sign</goal>
                         </goals>
                         <configuration>
-                            <keyname>pypi@esamtrade.com</keyname>
+                            <keyname>26366396DA3F1ECE2CEE662FF2C8FE56BBBF7F0D</keyname>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
+
+            <!-- Publish to the Maven Central Portal (central.sonatype.com) -->
             <plugin>
                 <groupId>org.sonatype.central</groupId>
                 <artifactId>central-publishing-maven-plugin</artifactId>
-                <version>0.7.0</version>
+                <version>0.11.0</version>
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
+                    <autoPublish>true</autoPublish>
+                    <waitUntil>published</waitUntil>
                 </configuration>
             </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.0.0</version>
+                <version>3.5.2</version>
                 <configuration>
-                    <environmentVariables combine.children="append">
-                        <MINIO_ACCESS_KEY>${MINIO_ACCESS_KEY}</MINIO_ACCESS_KEY>
-                        <MINIO_SECRET_KEY>${MINIO_SECRET_KEY}</MINIO_SECRET_KEY>
-                    </environmentVariables>
+                    <!-- trino-parquet's ColumnReaderFactory reads VectorShape.preferredShape() from
+                         a static initializer, so the incubator vector module is required at
+                         class-init time. aircompressor-v3 uses java.lang.foreign for native codecs.
+                         Test scope only; the published library needs neither flag. -->
+                    <argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
         </plugins>
     </build>
 
-    <!-- Required metadata for Maven Central -->
-    <developers>
-        <developer>
-            <id>esamtrade</id>
-            <name>ESAMTrade</name>
-            <email>contact@esamtrade.com</email>
-        </developer>
-        <developer>
-            <id>esamtrade-pypi</id>
-            <name>ESAMTrade pypi</name>
-            <email>pypi@esamtrade.com</email>
-        </developer>
-    </developers>
-
     <licenses>
         <license>
-            <name>Apache License, Version 2.0</name>
-            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
 
+    <developers>
+        <developer>
+            <id>esamtrade</id>
+            <name>eSAMTrade</name>
+            <email>contact@esamtrade.com</email>
+        </developer>
+    </developers>
+
     <scm>
-        <connection>scm:git:git://github.com/esamtrade/bucketbase.git</connection>
-        <developerConnection>scm:git:ssh://github.com:esamtrade/bucketbase.git</developerConnection>
-        <url>https://github.com/esamtrade/bucketbase</url>
+        <connection>scm:git:git://github.com/eSAMTrade/bucketbase.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/eSAMTrade/bucketbase.git</developerConnection>
+        <url>https://github.com/eSAMTrade/bucketbase</url>
     </scm>
 
 </project>

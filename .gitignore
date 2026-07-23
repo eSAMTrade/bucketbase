@@ -207,3 +207,6 @@ bin/
 ### Mac OS ###
 .DS_Store
 **/.bucketbase.fscache*/
+
+# Local-only signing secrets for Maven Central (never commit)
+.publish-secrets/

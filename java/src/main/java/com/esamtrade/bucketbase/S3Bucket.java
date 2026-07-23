@@ -1,6 +1,5 @@
 package com.esamtrade.bucketbase;
 
-import org.apache.commons.codec.digest.DigestUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
@@ -16,27 +15,29 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
-public class S3Bucket extends BaseBucket {
+public class S3Bucket implements IBucket {
     public static final int DEFAULT_READ_BUFFER_SIZE = 128 * 1024;
+    private static final int DELETE_BATCH_SIZE = 1000;
 
     protected S3Client s3Client;
     protected S3AsyncClient s3AsyncClient;
     protected String bucketName;
     protected int readBufferSize;
-
+    /** Whether this instance created the clients (and must therefore close them). */
+    private final boolean ownsClients;
 
     public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName) {
         this(s3Client, s3AsyncClient, bucketName, DEFAULT_READ_BUFFER_SIZE);
     }
 
     public S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName, int readBufferSize) {
+        this(s3Client, s3AsyncClient, bucketName, readBufferSize, false);
+    }
+
+    private S3Bucket(S3Client s3Client, S3AsyncClient s3AsyncClient, String bucketName, int readBufferSize, boolean ownsClients) {
         if (readBufferSize < 0) {
             throw new IllegalArgumentException("readBufferSize must be non-negative");
         }
@@ -44,6 +45,7 @@ public class S3Bucket extends BaseBucket {
         this.s3AsyncClient = s3AsyncClient;
         this.bucketName = bucketName;
         this.readBufferSize = readBufferSize;
+        this.ownsClients = ownsClients;
     }
 
     public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName) {
@@ -51,7 +53,7 @@ public class S3Bucket extends BaseBucket {
     }
 
     public S3Bucket(String endpoint, String accessKey, String secretKey, String bucketName, int readBufferSize) {
-        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName, readBufferSize);
+        this(createS3Client(endpoint, accessKey, secretKey), createS3AsyncClient(endpoint, accessKey, secretKey), bucketName, readBufferSize, true);
     }
 
     private static S3Client createS3Client(String endpoint, String accessKey, String secretKey) {
@@ -76,31 +78,24 @@ public class S3Bucket extends BaseBucket {
 
     @Override
     public void putObject(PurePosixPath name, byte[] content) {
+        String _name = S3Names.validateName(name);
         PutObjectRequest request = PutObjectRequest.builder()
                 .bucket(bucketName)
-                .key(name.toString())
+                .key(_name)
                 .build();
         s3Client.putObject(request, RequestBody.fromBytes(content));
     }
 
     @Override
-    public void putObjectStream(PurePosixPath name, InputStream stream) {
-        String _name = validateName(name);
-        try {
-            uploadLargeStream(_name, stream);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to upload object: " + _name, e);
-        } finally {
-            s3AsyncClient.close();
-        }
+    public void putObjectStream(PurePosixPath name, InputStream stream) throws IOException {
+        String _name = S3Names.validateName(name);
+        uploadLargeStream(_name, stream);
     }
 
-
-    private void uploadLargeStream(String key, InputStream inputStream) {
-        int partSize = 5 * 1024 * 1024; // 5 MB
+    private void uploadLargeStream(String key, InputStream inputStream) throws IOException {
+        // S3 requires every part except the last to be at least 5 MiB.
+        final int partSize = 5 * 1024 * 1024;
         List<CompletedPart> completedParts = new ArrayList<>();
-        byte[] buffer = new byte[partSize];
-        int bytesRead;
         int partNumber = 1;
 
         // 1. Initiate the multipart upload
@@ -112,23 +107,34 @@ public class S3Bucket extends BaseBucket {
         String uploadId = response.uploadId();
 
         try {
-            // 2. Read the input stream and upload each part
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                byte[] bytesToUpload = (bytesRead < partSize) ? java.util.Arrays.copyOf(buffer, bytesRead) : buffer;
-                UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
-                        .bucket(bucketName)
-                        .key(key)
-                        .uploadId(uploadId)
-                        .partNumber(partNumber)
-                        .contentLength((long) bytesRead)
-                        .build();
-                AsyncRequestBody requestBody = AsyncRequestBody.fromBytes(bytesToUpload);
-                CompletableFuture<UploadPartResponse> uploadPartResponse = s3AsyncClient.uploadPart(uploadPartRequest, requestBody);
-                completedParts.add(CompletedPart.builder()
-                        .partNumber(partNumber)
-                        .eTag(uploadPartResponse.join().eTag())
-                        .build());
-                partNumber++;
+            // 2. Read the input stream and upload each part.
+            //    readNBytes fills the buffer across however many short reads the source needs -
+            //    a plain read(buffer) may legally return far less than partSize without being at
+            //    EOF, which would produce undersized parts and an EntityTooSmall failure.
+            while (true) {
+                byte[] part = inputStream.readNBytes(partSize);
+                boolean lastPart = part.length < partSize;
+                // Skip a trailing empty read, but keep a single empty part for an empty object:
+                // completeMultipartUpload rejects an upload with no parts at all.
+                if (part.length > 0 || completedParts.isEmpty()) {
+                    UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
+                            .bucket(bucketName)
+                            .key(key)
+                            .uploadId(uploadId)
+                            .partNumber(partNumber)
+                            .contentLength((long) part.length)
+                            .build();
+                    AsyncRequestBody requestBody = AsyncRequestBody.fromBytes(part);
+                    CompletableFuture<UploadPartResponse> uploadPartResponse = s3AsyncClient.uploadPart(uploadPartRequest, requestBody);
+                    completedParts.add(CompletedPart.builder()
+                            .partNumber(partNumber)
+                            .eTag(uploadPartResponse.join().eTag())
+                            .build());
+                    partNumber++;
+                }
+                if (lastPart) {
+                    break;
+                }
             }
 
             // 3. Complete the multipart upload
@@ -140,48 +146,76 @@ public class S3Bucket extends BaseBucket {
                     .build();
             s3AsyncClient.completeMultipartUpload(completeMultipartUploadRequest).join();
         } catch (Exception e) {
-            // Abort the multipart upload in case of failure
-            AbortMultipartUploadRequest abortMultipartUploadRequest = AbortMultipartUploadRequest.builder()
+            abortQuietly(key, uploadId, e);
+            throw new IOException("Failed to upload object: " + key, e);
+        }
+    }
+
+    /**
+     * Aborts a multipart upload without letting the abort failure hide the original cause.
+     */
+    private void abortQuietly(String key, String uploadId, Exception primary) {
+        try {
+            s3AsyncClient.abortMultipartUpload(AbortMultipartUploadRequest.builder()
                     .bucket(bucketName)
                     .key(key)
                     .uploadId(uploadId)
-                    .build();
-            s3AsyncClient.abortMultipartUpload(abortMultipartUploadRequest).join();
-            throw new RuntimeException("Failed to upload object: " + key, e);
+                    .build()).join();
+        } catch (Exception abortFailure) {
+            primary.addSuppressed(abortFailure);
         }
     }
 
 
     @Override
     public byte[] getObject(PurePosixPath name) throws IOException {
-        try (ObjectStream objectStream = getObjectStream(name)) {
-            return objectStream.getStream().readAllBytes();
+        try (SeekableInputStream stream = getObjectStream(name)) {
+            return stream.readAllBytes();
         }
     }
 
     @Override
-    public ObjectStream getObjectStream(PurePosixPath name) throws IOException {
-        String objectName = validateName(name);
+    public SeekableInputStream getObjectStream(PurePosixPath name) throws IOException {
+        String objectName = S3Names.validateName(name);
+        HeadObjectResponse metadata = headObject(objectName);
+        return new RangeSeekableInputStream(
+                contentLengthOf(metadata, objectName),
+                readBufferSize,
+                (offset, dest, destOffset, length) -> readRange(objectName, metadata.eTag(), offset, dest, destOffset, length)
+        );
+    }
+
+    @Override
+    public long getSize(PurePosixPath name) throws IOException {
+        String objectName = S3Names.validateName(name);
+        return contentLengthOf(headObject(objectName), objectName);
+    }
+
+    private HeadObjectResponse headObject(String objectName) throws IOException {
         try {
-            HeadObjectResponse metadata = s3Client.headObject(HeadObjectRequest.builder()
+            return s3Client.headObject(HeadObjectRequest.builder()
                     .bucket(bucketName)
                     .key(objectName)
                     .build());
-            SeekableInputStream stream = new RangeSeekableInputStream(
-                    metadata.contentLength(),
-                    readBufferSize,
-                    (offset, length) -> readRange(objectName, metadata.eTag(), offset, length)
-            );
-            return new ObjectStream(stream, objectName);
         } catch (S3Exception e) {
+            // HEAD has no response body, so many S3-compatible servers (MinIO included) return a
+            // bare 404 that does not deserialize into NoSuchKeyException. Match on the status.
             if (e.statusCode() == 404) {
-                throw new FileNotFoundException("Object " + name + " not found in S3 bucket " + bucketName);
+                throw new FileNotFoundException("Object " + objectName + " not found in S3 bucket " + bucketName);
             }
             throw e;
         }
     }
 
-    private byte[] readRange(String objectName, String eTag, long offset, int length) throws IOException {
+    private static long contentLengthOf(HeadObjectResponse metadata, String objectName) throws IOException {
+        Long contentLength = metadata.contentLength();
+        if (contentLength == null) {
+            throw new IOException("S3 did not report a content length for object " + objectName);
+        }
+        return contentLength;
+    }
+
+    private void readRange(String objectName, String eTag, long offset, byte[] dest, int destOffset, int length) throws IOException {
         GetObjectRequest.Builder request = GetObjectRequest.builder()
                 .bucket(bucketName)
                 .key(objectName)
@@ -190,7 +224,11 @@ public class S3Bucket extends BaseBucket {
             request.ifMatch(eTag);
         }
         try (ResponseInputStream<GetObjectResponse> response = s3Client.getObject(request.build())) {
-            return response.readAllBytes();
+            // Read straight into the caller's buffer - no intermediate copy for large reads.
+            int read = response.readNBytes(dest, destOffset, length);
+            if (read != length) {
+                throw new IOException("Expected " + length + " bytes at offset " + offset + " of " + objectName + ", but received " + read);
+            }
         } catch (S3Exception e) {
             throw new IOException("Failed to read object " + objectName + " range at offset " + offset + " with length " + length, e);
         }
@@ -207,36 +245,36 @@ public class S3Bucket extends BaseBucket {
      * @return A list of paths to the objects in the bucket.
      */
     public List<PurePosixPath> listObjects(PurePosixPath prefix) {
-        splitPrefix(prefix); // validate prefix
-        List<PurePosixPath> result = new ArrayList<>();
+        String validated = S3Names.validatePrefix(prefix);
         ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
-                .prefix(prefix.toString())
+                .prefix(validated)
                 .build();
-
-        List<PurePosixPath> results = s3Client.listObjectsV2Paginator(request).contents().stream().map(S3Object::key).map(PurePosixPath::from).toList();
-
-        return results;
+        // The paginator transparently follows continuation tokens across all pages.
+        return s3Client.listObjectsV2Paginator(request).contents().stream()
+                .map(S3Object::key)
+                .map(PurePosixPath::from)
+                .collect(java.util.stream.Collectors.toList());
     }
 
     @Override
     public ShallowListing shallowListObjects(PurePosixPath prefix) {
-        splitPrefix(prefix); // validate prefix
+        String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> objects = new ArrayList<>();
         List<PurePosixPath> prefixes = new ArrayList<>();
 
         ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
-                .prefix(prefix.toString())
-                .delimiter(SEP)
+                .prefix(validated)
+                .delimiter(PurePosixPath.SEP)
                 .build();
 
-        s3Client.listObjectsV2Paginator(request).stream().forEach(response -> {
+        s3Client.listObjectsV2Paginator(request).forEach(response -> {
             for (S3Object object : response.contents()) {
-                objects.add(new PurePosixPath(object.key()));
+                objects.add(PurePosixPath.from(object.key()));
             }
             for (CommonPrefix commonPrefix : response.commonPrefixes()) {
-                prefixes.add(new PurePosixPath(commonPrefix.prefix()));
+                prefixes.add(PurePosixPath.from(commonPrefix.prefix()));
             }
         });
 
@@ -245,111 +283,63 @@ public class S3Bucket extends BaseBucket {
 
     @Override
     public boolean exists(PurePosixPath name) {
-        String _name = validateName(name);
+        String _name = S3Names.validateName(name);
         try {
-            HeadObjectRequest request = HeadObjectRequest.builder()
+            s3Client.headObject(HeadObjectRequest.builder()
                     .bucket(bucketName)
                     .key(_name)
-                    .build();
-            s3Client.headObject(request);
+                    .build());
             return true;
-        } catch (NoSuchKeyException e) {
-            return false;
+        } catch (S3Exception e) {
+            // A HEAD 404 does not always deserialize into NoSuchKeyException on S3-compatible
+            // servers, so treat any 404 as "does not exist".
+            if (e.statusCode() == 404) {
+                return false;
+            }
+            throw e;
         }
     }
 
     /**
-     * Removes multiple objects from the S3 bucket.
-     *
-     * <p>**Note:** Amazon S3 requires the `Content-MD5` header for all Multi-Object Delete requests to ensure
-     * data integrity. When interacting with S3-compatible storage solutions like MinIO, omitting this header
-     * can result in a `400 Bad Request` error indicating a missing `Content-Md5` header.
-     *
-     * <p>This ensures compatibility with MinIO and similar services that enforce the presence of the `Content-MD5` header.
-     * <a href="https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html">More info</a>
-     *
-     * @param names List of object paths to be removed.
-     * @return List of errors encountered during the deletion process.
+     * Deletes multiple objects in a single request per 1000 keys. Deleting a key that does not
+     * exist is not an error (consistent with S3). Any keys the server reports as failed - for
+     * example due to permissions - are returned as {@link DeleteError}s rather than thrown.
      */
     @Override
     public List<DeleteError> removeObjects(List<PurePosixPath> names) {
-        List<String> validatedNames = names.stream()
-                .map(BaseBucket::validateName)
-                .toList();
+        List<String> validatedNames = names.stream().map(S3Names::validateName).toList();
         List<DeleteError> allErrors = new ArrayList<>();
-        // Process in batches of 1000 (S3's maximum limit for a single delete operation)
-        for (int i = 0; i < validatedNames.size(); i += 1000) {
-            int endIndex = Math.min(i + 1000, validatedNames.size());
-            List<String> batch = validatedNames.subList(i, endIndex);
-
-            List<DeleteError> batchErrors = removeBatch(batch);
-            allErrors.addAll(batchErrors);
+        for (int i = 0; i < validatedNames.size(); i += DELETE_BATCH_SIZE) {
+            List<String> batch = validatedNames.subList(i, Math.min(i + DELETE_BATCH_SIZE, validatedNames.size()));
+            allErrors.addAll(removeBatch(batch));
         }
-
         return allErrors;
     }
 
     private List<DeleteError> removeBatch(List<String> names) {
+        if (names.isEmpty()) {
+            return List.of();
+        }
         List<ObjectIdentifier> keys = names.stream()
-                .map(name -> ObjectIdentifier.builder()
-                        .key(name)
-                        .build())
-                .collect(Collectors.toList());
-        Set<String> namesSet = new HashSet<>(names);
+                .map(name -> ObjectIdentifier.builder().key(name).build())
+                .toList();
+        DeleteObjectsResponse response = s3Client.deleteObjects(DeleteObjectsRequest.builder()
+                .bucket(bucketName)
+                .delete(Delete.builder().objects(keys).build())
+                .build());
+        // response.errors() carries the per-key failures; response.deleted() are the successes.
+        return response.errors().stream()
+                .map(error -> new DeleteError(error.code(), error.message(), error.key()))
+                .collect(java.util.stream.Collectors.toList());
+    }
 
-        List<DeleteError> errors = new ArrayList<>();
-        DeleteObjectsResponse response;
-        if (!keys.isEmpty()) {
-            try {
-                Delete delete = Delete.builder().objects(keys).build();
-
-                DeleteObjectsRequest request = DeleteObjectsRequest.builder()
-                        .bucket(bucketName)
-                        .delete(delete)
-                        .build();
-
-                response = s3Client.deleteObjects(request);
-            } catch (S3Exception e) {
-                if (e.statusCode() == 400 && e.getMessage().contains("Content-Md5")) {
-                    // Explicitly adding the Content-MD5 header for compatibility with MinIO, so manually constructing the XML payload
-                    StringBuilder xmlBuilder = new StringBuilder();
-                    xmlBuilder.append("<Delete>");
-                    for (ObjectIdentifier key : keys) {
-                        xmlBuilder.append("<Object><Key>")
-                                .append(key.key())
-                                .append("</Key></Object>");
-                    }
-                    xmlBuilder.append("</Delete>");
-                    String xmlPayload = xmlBuilder.toString();
-
-                    // Compute MD5 checksum
-                    byte[] md5Bytes = DigestUtils.md5(xmlPayload);
-                    String contentMd5 = Base64.getEncoder().encodeToString(md5Bytes);
-
-                    // Create Delete object
-                    Delete delete = Delete.builder().objects(keys).build();
-
-                    // Create DeleteObjectsRequest with Content-MD5 header
-                    DeleteObjectsRequest request = DeleteObjectsRequest.builder()
-                            .bucket(bucketName)
-                            .delete(delete)
-                            .overrideConfiguration(o -> o.putHeader("Content-MD5", contentMd5))
-                            .build();
-
-                    // Perform the delete operation
-                    response = s3Client.deleteObjects(request);
-                } else {
-                    throw e;
-                }
-            }
-
-            // Process the response
-            for (DeletedObject deleted : response.deleted()) {
-                if (!namesSet.contains(deleted.key())) {
-                    errors.add(new DeleteError("Object not found: " + deleted.key()));
-                }
+    @Override
+    public void close() {
+        if (ownsClients) {
+            s3Client.close();
+            if (s3AsyncClient != null) {
+                s3AsyncClient.close();
             }
         }
-        return errors;
     }
 }
