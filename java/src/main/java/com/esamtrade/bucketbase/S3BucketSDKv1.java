@@ -36,12 +36,21 @@ public class S3BucketSDKv1 extends BaseBucket {
     protected String bucketName;
 
     public S3BucketSDKv1(String endpoint, String accessKey, String secretKey, String bucketName) {
-        BasicAWSCredentials awsCreds = new BasicAWSCredentials(accessKey, secretKey);
-        this.s3Client = AmazonS3ClientBuilder.standard()
-                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, ""))
-                .withCredentials(new AWSStaticCredentialsProvider(awsCreds))
-                .withPathStyleAccessEnabled(true)
-                .build();
+        this(
+                AmazonS3ClientBuilder
+                        .standard()
+                        .withEndpointConfiguration(
+                                new AwsClientBuilder.EndpointConfiguration(endpoint, ""))
+                        .withCredentials(
+                                new AWSStaticCredentialsProvider(
+                                        new BasicAWSCredentials(accessKey, secretKey)))
+                        .withPathStyleAccessEnabled(true)
+                        .build(),
+                bucketName);
+    }
+
+    public S3BucketSDKv1(AmazonS3 s3Client, String bucketName) {
+        this.s3Client = s3Client;
         this.bucketName = bucketName;
     }
 
