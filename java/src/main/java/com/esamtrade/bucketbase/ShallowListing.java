@@ -9,7 +9,7 @@ import java.util.List;
  * @param objects  object keys directly under the prefix
  * @param prefixes common child prefixes (each ending with {@code /})
  */
-public record ShallowListing(List<PurePosixPath> objects, List<PurePosixPath> prefixes) {
+public record ShallowListing(List<PurePosixPath> objects, List<PurePosixPrefix> prefixes) {
 
     public ShallowListing {
         objects = List.copyOf(objects);

@@ -1,5 +1,10 @@
 package com.esamtrade.bucketbase;
 
+import com.amazonaws.services.s3.model.AmazonS3Exception;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+
 /**
  * Test configuration, mirroring {@code python/tests/base_config.py}.
  *
@@ -33,6 +38,55 @@ public final class TestConfig {
     public static boolean functionalTestsEnabled() {
         String skip = System.getenv("BUCKETBASE_SKIP_FUNCTIONAL_TESTS");
         return skip == null || skip.isBlank() || skip.equals("0") || skip.equalsIgnoreCase("false");
+    }
+
+    /**
+     * Ensures the configured bucket exists before an SDK v2 functional test uses it.
+     *
+     * <p>Creation is deliberately test-fixture behavior; constructing a production
+     * {@link S3Bucket} must not mutate S3 infrastructure.</p>
+     */
+    static void ensureBucketExists(S3Bucket bucket) {
+        HeadBucketRequest headRequest = HeadBucketRequest.builder()
+                .bucket(bucket.bucketName)
+                .build();
+        try {
+            bucket.s3Client.headBucket(headRequest);
+            return;
+        } catch (S3Exception exception) {
+            if (exception.statusCode() != 404) {
+                throw exception;
+            }
+        }
+
+        try {
+            bucket.s3Client.createBucket(CreateBucketRequest.builder()
+                    .bucket(bucket.bucketName)
+                    .build());
+        } catch (S3Exception exception) {
+            // Another concurrently running test process may have created the bucket.
+            if (exception.statusCode() != 409) {
+                throw exception;
+            }
+        }
+        bucket.s3Client.headBucket(headRequest);
+    }
+
+    /** Ensures the configured bucket exists before an SDK v1 functional test uses it. */
+    static void ensureBucketExists(S3BucketSDKv1 bucket) {
+        if (!bucket.s3Client.doesBucketExistV2(bucket.bucketName)) {
+            try {
+                bucket.s3Client.createBucket(bucket.bucketName);
+            } catch (AmazonS3Exception exception) {
+                // Another concurrently running test process may have created the bucket.
+                if (exception.getStatusCode() != 409) {
+                    throw exception;
+                }
+            }
+        }
+        if (!bucket.s3Client.doesBucketExistV2(bucket.bucketName)) {
+            throw new IllegalStateException("S3 test bucket is not accessible: " + bucket.bucketName);
+        }
     }
 
     private static String envOrDefault(String name, String fallback) {

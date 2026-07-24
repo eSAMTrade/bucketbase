@@ -61,7 +61,7 @@ public class MemoryBucket implements IBucket {
     }
 
     @Override
-    public List<PurePosixPath> listObjects(PurePosixPath prefix) {
+    public List<PurePosixPath> listObjects(PurePosixPrefix prefix) {
         String strPrefix = S3Names.validatePrefix(prefix);
         return objects.keySet().stream()
                 .filter(key -> key.startsWith(strPrefix))
@@ -70,11 +70,11 @@ public class MemoryBucket implements IBucket {
     }
 
     @Override
-    public ShallowListing shallowListObjects(PurePosixPath prefix) {
+    public ShallowListing shallowListObjects(PurePosixPrefix prefix) {
         String strPrefix = S3Names.validatePrefix(prefix);
         int prefLen = strPrefix.length();
         List<PurePosixPath> objectsList = new ArrayList<>();
-        Set<PurePosixPath> prefixesSet = new HashSet<>();
+        Set<PurePosixPrefix> prefixesSet = new HashSet<>();
         for (String key : objects.keySet()) {
             if (!key.startsWith(strPrefix)) {
                 continue;
@@ -84,7 +84,8 @@ public class MemoryBucket implements IBucket {
             if (slash < 0) {
                 objectsList.add(PurePosixPath.from(key));
             } else {
-                prefixesSet.add(PurePosixPath.from(strPrefix + suffix.substring(0, slash) + "/"));
+                prefixesSet.add(PurePosixPrefix.from(
+                        strPrefix + suffix.substring(0, slash) + "/"));
             }
         }
         return new ShallowListing(objectsList, new ArrayList<>(prefixesSet));

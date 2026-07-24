@@ -23,12 +23,15 @@ class S3BucketSDKv1Test {
                 TestConfig.MINIO_ACCESS_KEY,
                 TestConfig.MINIO_SECRET_KEY,
                 TestConfig.MINIO_BUCKET);
+        TestConfig.ensureBucketExists(bucket);
         tester = new IBucketTester(bucket);
     }
 
     @AfterEach
     void tearDown() throws IOException {
-        tester.cleanup();
+        if (tester != null) {
+            tester.cleanup();
+        }
     }
 
 

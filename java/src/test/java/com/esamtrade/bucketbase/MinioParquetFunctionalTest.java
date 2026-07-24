@@ -38,7 +38,7 @@ class MinioParquetFunctionalTest {
     private static final int ROWS = 30_000;
 
     private S3Bucket bucket;
-    private PurePosixPath prefix;
+    private PurePosixPrefix prefix;
     private PurePosixPath object;
 
     @BeforeEach
@@ -51,13 +51,17 @@ class MinioParquetFunctionalTest {
                 TestConfig.MINIO_SECRET_KEY,
                 TestConfig.MINIO_BUCKET,
                 0);
-        prefix = PurePosixPath.from("bucketbase-java-parquet-" + UUID.randomUUID().toString().substring(0, 8) + "/");
-        object = prefix.join("data.parquet");
+        TestConfig.ensureBucketExists(bucket);
+        prefix = PurePosixPrefix.from(
+                "bucketbase-java-parquet-" + UUID.randomUUID().toString().substring(0, 8) + "/");
+        object = prefix.join(new PurePosixPath("data.parquet"));
     }
 
     @AfterEach
     void tearDown() throws IOException {
-        bucket.removePrefix(prefix);
+        if (bucket != null && prefix != null) {
+            bucket.removePrefix(prefix);
+        }
     }
 
     @Test

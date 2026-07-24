@@ -71,9 +71,19 @@ public interface IBucket extends Closeable {
         return new ObjectWriter(this, name, timeoutMillis);
     }
 
-    List<PurePosixPath> listObjects(PurePosixPath prefix) throws IOException;
+    List<PurePosixPath> listObjects(PurePosixPrefix prefix) throws IOException;
 
-    ShallowListing shallowListObjects(PurePosixPath prefix) throws IOException;
+    /** Lists every object in the bucket using the empty prefix. */
+    default List<PurePosixPath> listObjects() throws IOException {
+        return listObjects(new PurePosixPrefix());
+    }
+
+    ShallowListing shallowListObjects(PurePosixPrefix prefix) throws IOException;
+
+    /** Lists root-level objects and common prefixes using the empty prefix. */
+    default ShallowListing shallowListObjects() throws IOException {
+        return shallowListObjects(new PurePosixPrefix());
+    }
 
     boolean exists(PurePosixPath name) throws IOException;
 
@@ -109,7 +119,7 @@ public interface IBucket extends Closeable {
         }
     }
 
-    default void removePrefix(PurePosixPath prefix) throws IOException {
+    default void removePrefix(PurePosixPrefix prefix) throws IOException {
         List<PurePosixPath> objects = listObjects(prefix);
         removeObjects(objects);
     }
@@ -128,7 +138,11 @@ public interface IBucket extends Closeable {
      * Copies every object under {@code srcPrefix} from this bucket to {@code dstPrefix} in
      * {@code dstBucket}, using up to {@code threads} worker threads.
      */
-    default void copyPrefix(IBucket dstBucket, PurePosixPath srcPrefix, PurePosixPath dstPrefix, int threads) throws IOException {
+    default void copyPrefix(
+            IBucket dstBucket,
+            PurePosixPrefix srcPrefix,
+            PurePosixPrefix dstPrefix,
+            int threads) throws IOException {
         if (threads <= 0) {
             throw new IllegalArgumentException("threads must be greater than 0");
         }
@@ -166,7 +180,11 @@ public interface IBucket extends Closeable {
         }
     }
 
-    default void movePrefix(IBucket dstBucket, PurePosixPath srcPrefix, PurePosixPath dstPrefix, int threads) throws IOException {
+    default void movePrefix(
+            IBucket dstBucket,
+            PurePosixPrefix srcPrefix,
+            PurePosixPrefix dstPrefix,
+            int threads) throws IOException {
         copyPrefix(dstBucket, srcPrefix, dstPrefix, threads);
         removePrefix(srcPrefix);
     }

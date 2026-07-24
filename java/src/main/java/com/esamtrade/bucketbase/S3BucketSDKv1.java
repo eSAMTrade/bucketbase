@@ -165,7 +165,7 @@ public class S3BucketSDKv1 implements IBucket {
      * @return a list of PurePosixPath objects representing the matching objects
      */
     @Override
-    public List<PurePosixPath> listObjects(PurePosixPath prefix) {
+    public List<PurePosixPath> listObjects(PurePosixPrefix prefix) {
         String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> result = new ArrayList<>();
         ObjectListing objectListing = s3Client.listObjects(bucketName, validated);
@@ -182,18 +182,18 @@ public class S3BucketSDKv1 implements IBucket {
     }
 
     @Override
-    public ShallowListing shallowListObjects(PurePosixPath prefix) {
+    public ShallowListing shallowListObjects(PurePosixPrefix prefix) {
         String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> objects = new ArrayList<>();
-        List<PurePosixPath> prefixes = new ArrayList<>();
-        ListObjectsV2Request request = new ListObjectsV2Request().withBucketName(bucketName).withPrefix(validated).withDelimiter(PurePosixPath.SEP);
+        List<PurePosixPrefix> prefixes = new ArrayList<>();
+        ListObjectsV2Request request = new ListObjectsV2Request().withBucketName(bucketName).withPrefix(validated).withDelimiter(PurePosixPrefix.SEP);
         ListObjectsV2Result result;
         do {
             result = s3Client.listObjectsV2(request);
             for (S3ObjectSummary summary : result.getObjectSummaries()) {
                 objects.add(PurePosixPath.from(summary.getKey()));
             }
-            prefixes.addAll(result.getCommonPrefixes().stream().map(PurePosixPath::from).toList());
+            prefixes.addAll(result.getCommonPrefixes().stream().map(PurePosixPrefix::from).toList());
             request.setContinuationToken(result.getNextContinuationToken());
         } while (result.isTruncated());
 

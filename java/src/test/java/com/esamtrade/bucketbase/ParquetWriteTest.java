@@ -73,7 +73,7 @@ class ParquetWriteTest {
 
         assertEquals("simulated failure after writing the Parquet body", boom.getMessage());
         assertFalse(bucket.exists(OBJECT), "an aborted write must not create an object");
-        assertTrue(bucket.listObjects(PurePosixPath.from("parquet/")).isEmpty(),
+        assertTrue(bucket.listObjects(PurePosixPrefix.from("parquet/")).isEmpty(),
                 "no partial object should be listed either");
     }
 

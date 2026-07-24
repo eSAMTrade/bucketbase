@@ -244,7 +244,7 @@ public class S3Bucket implements IBucket {
      * @param prefix The prefix to filter objects by.
      * @return A list of paths to the objects in the bucket.
      */
-    public List<PurePosixPath> listObjects(PurePosixPath prefix) {
+    public List<PurePosixPath> listObjects(PurePosixPrefix prefix) {
         String validated = S3Names.validatePrefix(prefix);
         ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
@@ -258,15 +258,15 @@ public class S3Bucket implements IBucket {
     }
 
     @Override
-    public ShallowListing shallowListObjects(PurePosixPath prefix) {
+    public ShallowListing shallowListObjects(PurePosixPrefix prefix) {
         String validated = S3Names.validatePrefix(prefix);
         List<PurePosixPath> objects = new ArrayList<>();
-        List<PurePosixPath> prefixes = new ArrayList<>();
+        List<PurePosixPrefix> prefixes = new ArrayList<>();
 
         ListObjectsV2Request request = ListObjectsV2Request.builder()
                 .bucket(bucketName)
                 .prefix(validated)
-                .delimiter(PurePosixPath.SEP)
+                .delimiter(PurePosixPrefix.SEP)
                 .build();
 
         s3Client.listObjectsV2Paginator(request).forEach(response -> {
@@ -274,7 +274,7 @@ public class S3Bucket implements IBucket {
                 objects.add(PurePosixPath.from(object.key()));
             }
             for (CommonPrefix commonPrefix : response.commonPrefixes()) {
-                prefixes.add(PurePosixPath.from(commonPrefix.prefix()));
+                prefixes.add(PurePosixPrefix.from(commonPrefix.prefix()));
             }
         });
 

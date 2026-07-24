@@ -60,12 +60,12 @@ public abstract class AbstractAppendOnlySynchronizedBucket implements IBucket {
     }
 
     @Override
-    public List<PurePosixPath> listObjects(PurePosixPath prefix) throws IOException {
+    public List<PurePosixPath> listObjects(PurePosixPrefix prefix) throws IOException {
         return baseBucket.listObjects(prefix);
     }
 
     @Override
-    public ShallowListing shallowListObjects(PurePosixPath prefix) throws IOException {
+    public ShallowListing shallowListObjects(PurePosixPrefix prefix) throws IOException {
         return baseBucket.shallowListObjects(prefix);
     }
 
@@ -80,12 +80,16 @@ public abstract class AbstractAppendOnlySynchronizedBucket implements IBucket {
     }
 
     @Override
-    public void removePrefix(PurePosixPath prefix) {
+    public void removePrefix(PurePosixPrefix prefix) {
         throw new UnsupportedOperationException("removePrefix is not supported for an append-only bucket");
     }
 
     @Override
-    public void movePrefix(IBucket dstBucket, PurePosixPath srcPrefix, PurePosixPath dstPrefix, int threads) {
+    public void movePrefix(
+            IBucket dstBucket,
+            PurePosixPrefix srcPrefix,
+            PurePosixPrefix dstPrefix,
+            int threads) {
         // Fail fast: the copy would otherwise succeed and only the delete step would fail, leaving
         // the data duplicated.
         throw new UnsupportedOperationException("movePrefix is not supported for an append-only bucket");

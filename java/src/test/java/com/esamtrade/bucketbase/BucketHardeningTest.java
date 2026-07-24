@@ -42,7 +42,7 @@ class BucketHardeningTest {
 
         // A batch containing an invalid name must be rejected wholesale, not applied halfway.
         assertThrows(IllegalArgumentException.class,
-                () -> bucket.removeObjects(List.of(valid, new PurePosixPath("bad/"))));
+                () -> bucket.removeObjects(List.of(valid, new PurePosixPath("bad*"))));
         assertTrue(bucket.exists(valid), "a rejected batch must not have deleted the valid key");
     }
 
@@ -76,8 +76,8 @@ class BucketHardeningTest {
     void copyPrefixWithEmptySourceIsANoOp() throws IOException {
         MemoryBucket dst = new MemoryBucket();
         // Must not throw (the old code created a zero-size thread pool).
-        bucket.copyPrefix(dst, PurePosixPath.from("nothing-here/"), PurePosixPath.from("out/"), 4);
-        assertTrue(dst.listObjects(PurePosixPath.from("out/")).isEmpty());
+        bucket.copyPrefix(dst, PurePosixPrefix.from("nothing-here/"), PurePosixPrefix.from("out/"), 4);
+        assertTrue(dst.listObjects(PurePosixPrefix.from("out/")).isEmpty());
     }
 
     @Test
@@ -87,11 +87,11 @@ class BucketHardeningTest {
         MemoryBucket dst = new MemoryBucket();
 
         // threads > 1 exercises the executor path.
-        bucket.copyPrefix(dst, PurePosixPath.from("src/"), PurePosixPath.from("dst/"), 3);
+        bucket.copyPrefix(dst, PurePosixPrefix.from("src/"), PurePosixPrefix.from("dst/"), 3);
 
         assertArrayEquals("a".getBytes(), dst.getObject(PurePosixPath.from("dst/a.txt")));
         assertArrayEquals("b".getBytes(), dst.getObject(PurePosixPath.from("dst/nested/b.txt")));
-        assertEquals(2, dst.listObjects(PurePosixPath.from("dst/")).size());
+        assertEquals(2, dst.listObjects(PurePosixPrefix.from("dst/")).size());
     }
 
     @Test
@@ -99,10 +99,10 @@ class BucketHardeningTest {
         bucket.putObject(PurePosixPath.from("src/a.txt"), "a".getBytes());
         MemoryBucket dst = new MemoryBucket();
 
-        bucket.movePrefix(dst, PurePosixPath.from("src/"), PurePosixPath.from("dst/"), 1);
+        bucket.movePrefix(dst, PurePosixPrefix.from("src/"), PurePosixPrefix.from("dst/"), 1);
 
         assertArrayEquals("a".getBytes(), dst.getObject(PurePosixPath.from("dst/a.txt")));
-        assertTrue(bucket.listObjects(PurePosixPath.from("src/")).isEmpty());
+        assertTrue(bucket.listObjects(PurePosixPrefix.from("src/")).isEmpty());
     }
 
     @Test
@@ -124,6 +124,16 @@ class BucketHardeningTest {
     }
 
     @Test
+    void noArgumentListingsUseTheEmptyPrefix() throws IOException {
+        bucket.putObject(PurePosixPath.from("root.bin"), new byte[]{1});
+        bucket.putObject(PurePosixPath.from("dir/nested.bin"), new byte[]{2});
+
+        assertEquals(2, bucket.listObjects().size());
+        assertEquals(List.of(PurePosixPath.from("root.bin")), bucket.shallowListObjects().objects());
+        assertEquals(List.of(PurePosixPrefix.from("dir/")), bucket.shallowListObjects().prefixes());
+    }
+
+    @Test
     void appendOnlyRejectsMutations() throws IOException {
         LockRecordingAppendOnly appendOnly = new LockRecordingAppendOnly(bucket);
         PurePosixPath name = PurePosixPath.from("dir/once.bin");
@@ -133,11 +143,12 @@ class BucketHardeningTest {
         assertTrue(appendOnly.wasLocked());
 
         assertThrows(UnsupportedOperationException.class, () -> appendOnly.removeObjects(List.of(name)));
-        assertThrows(UnsupportedOperationException.class, () -> appendOnly.removePrefix(PurePosixPath.from("dir/")));
+        assertThrows(UnsupportedOperationException.class, () -> appendOnly.removePrefix(PurePosixPrefix.from("dir/")));
         // movePrefix must fail fast rather than copy-then-fail.
         MemoryBucket dst = new MemoryBucket();
         assertThrows(UnsupportedOperationException.class,
-                () -> appendOnly.movePrefix(dst, PurePosixPath.from("dir/"), PurePosixPath.from("out/"), 1));
+                () -> appendOnly.movePrefix(
+                        dst, PurePosixPrefix.from("dir/"), PurePosixPrefix.from("out/"), 1));
         assertFalse(dst.exists(PurePosixPath.from("out/once.bin")), "movePrefix must not have copied anything");
     }
 
