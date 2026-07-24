@@ -6,7 +6,7 @@ plugins {
 }
 
 group = 'com.esamtrade'
-version = providers.gradleProperty('releaseVersion').orElse('0.1.0').get()
+version = '0.1.0'
 description = 'BucketBase Java library for abstracting object storage solutions'
 
 def commonsIoVersion = '2.16.1'
