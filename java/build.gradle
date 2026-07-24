@@ -1,0 +1,125 @@
+import com.vanniktech.maven.publish.DeploymentValidation
+
+plugins {
+    id 'java-library'
+    id 'com.vanniktech.maven.publish' version '0.37.0'
+}
+
+group = 'com.esamtrade'
+version = providers.gradleProperty('releaseVersion').orElse('0.1.0').get()
+description = 'BucketBase Java library for abstracting object storage solutions'
+
+def commonsIoVersion = '2.16.1'
+def awsSdkV2Version = '2.30.36'
+def awsSdkV1Version = '1.12.782'
+def junitVersion = '5.10.0'
+def trinoVersion = '483'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+dependencies {
+    // Required internally by PurePosixPath and PurePosixPrefix at runtime.
+    implementation "commons-io:commons-io:${commonsIoVersion}"
+
+    // Optional backends. Consumers add only the SDK for the backend they use.
+    compileOnly "software.amazon.awssdk:s3:${awsSdkV2Version}"
+    compileOnly "com.amazonaws:aws-java-sdk-s3:${awsSdkV1Version}"
+    testImplementation "software.amazon.awssdk:s3:${awsSdkV2Version}"
+    testImplementation "com.amazonaws:aws-java-sdk-s3:${awsSdkV1Version}"
+
+    testImplementation platform("org.junit:junit-bom:${junitVersion}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Used only to prove real Parquet partial reads, projection, predicate pushdown and writes.
+    testImplementation "io.trino:trino-parquet:${trinoVersion}"
+    testImplementation "io.trino:trino-spi:${trinoVersion}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    // Required only by the test-scoped Trino Parquet implementation.
+    jvmArgs '--add-modules', 'jdk.incubator.vector',
+            '--enable-native-access=ALL-UNNAMED'
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.addBooleanOption('Xdoclint:none', true)
+}
+
+mavenPublishing {
+    coordinates('com.esamtrade', 'bucketbase', project.version.toString())
+    publishToMavenCentral(true, DeploymentValidation.PUBLISHED)
+    signAllPublications()
+
+    pom {
+        name = 'BucketBase'
+        description = project.description
+        url = 'https://github.com/eSAMTrade/bucketbase'
+
+        licenses {
+            license {
+                name = 'MIT License'
+                url = 'https://opensource.org/licenses/MIT'
+                distribution = 'repo'
+            }
+        }
+
+        developers {
+            developer {
+                id = 'esamtrade'
+                name = 'eSAMTrade'
+                email = 'contact@esamtrade.com'
+            }
+        }
+
+        scm {
+            connection = 'scm:git:git://github.com/eSAMTrade/bucketbase.git'
+            developerConnection = 'scm:git:ssh://git@github.com/eSAMTrade/bucketbase.git'
+            url = 'https://github.com/eSAMTrade/bucketbase'
+        }
+    }
+}
+
+// Gradle compileOnly dependencies are intentionally absent from a generated Maven POM.
+// Publish the two backend SDKs as Maven-optional so consumers can discover their coordinates
+// without forcing either SDK onto core-only users.
+publishing.publications.withType(MavenPublication).configureEach {
+    pom.withXml {
+        Node dependenciesNode = asNode().dependencies.isEmpty()
+                ? asNode().appendNode('dependencies')
+                : asNode().dependencies[0]
+        [
+                ['software.amazon.awssdk', 's3', awsSdkV2Version],
+                ['com.amazonaws', 'aws-java-sdk-s3', awsSdkV1Version]
+        ].each { coordinates ->
+            Node dependencyNode = dependenciesNode.appendNode('dependency')
+            dependencyNode.appendNode('groupId', coordinates[0])
+            dependencyNode.appendNode('artifactId', coordinates[1])
+            dependencyNode.appendNode('version', coordinates[2])
+            dependencyNode.appendNode('scope', 'compile')
+            dependencyNode.appendNode('optional', 'true')
+        }
+    }
+}
+
+// A Central release is immutable. Never allow an upload task to bypass the full test suite.
+tasks.withType(PublishToMavenRepository).configureEach {
+    if (name.endsWith('ToMavenCentralRepository')) {
+        dependsOn tasks.named('test')
+    }
+}
