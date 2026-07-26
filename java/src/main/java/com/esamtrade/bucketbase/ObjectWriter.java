@@ -35,6 +35,9 @@ public final class ObjectWriter implements AutoCloseable {
     /** How long {@link #commit()} and {@link #close()} wait for the uploader to settle. */
     public static final long DEFAULT_TIMEOUT_MILLIS = 5 * 60 * 1000L;
 
+    /** How long a cancelled uploader is given to unwind after being interrupted. */
+    private static final long CANCELLATION_GRACE_MILLIS = 2_000L;
+
     private final PurePosixPath name;
     private final StreamPipe pipe = new StreamPipe();
     private final AtomicReference<Throwable> uploadFailure = new AtomicReference<>();
@@ -119,14 +122,34 @@ public final class ObjectWriter implements AutoCloseable {
         uploadFailure.set(null);
     }
 
+    /**
+     * Waits for the uploader to settle, cancelling it if it outlives the timeout.
+     *
+     * <p>The timeout has to be an upper bound on the <em>upload</em>, not merely on the caller's
+     * wait: an uploader left running could finish later and publish an object the caller was
+     * already told had failed. Cancellation is best-effort - it depends on the underlying store
+     * honouring interruption - but leaving the thread running guarantees the contract is broken.</p>
+     */
     private void awaitUploader() throws IOException {
+        boolean timedOut = false;
         try {
             uploader.join(timeoutMillis);
+            if (uploader.isAlive()) {
+                timedOut = true;
+                uploader.interrupt();
+                // Give the interrupt a brief chance to unwind before reporting the timeout.
+                uploader.join(CANCELLATION_GRACE_MILLIS);
+            }
         } catch (InterruptedException e) {
+            uploader.interrupt();
             Thread.currentThread().interrupt();
             throw new IOException("Interrupted while finishing the write of " + name, e);
         }
         if (uploader.isAlive()) {
+            throw new IOException("Timed out after " + timeoutMillis + " ms waiting for the upload of " + name
+                    + "; the upload was cancelled but did not stop");
+        }
+        if (timedOut) {
             throw new IOException("Timed out after " + timeoutMillis + " ms waiting for the upload of " + name);
         }
     }

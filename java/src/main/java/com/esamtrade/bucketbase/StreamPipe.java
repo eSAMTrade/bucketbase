@@ -14,15 +14,19 @@ import java.util.Objects;
  *
  * <p>Unlike {@link java.io.PipedInputStream} it can make the reader <em>fail</em> on demand
  * ({@link #abort}), which is what lets an aborted write make the in-flight upload throw instead of
- * committing a truncated object. A slow reader back-pressures the writer (bounded capacity) rather
- * than letting unbounded data accumulate.</p>
+ * committing a truncated object. A slow reader back-pressures the writer rather than letting data
+ * accumulate: at most {@value #MAX_QUEUED_CHUNKS} chunks of {@value #MAX_CHUNK_BYTES} bytes are
+ * buffered, and a larger write blocks until the reader drains, however big a single
+ * {@code write(byte[])} call is.</p>
  *
  * <p>Coordination is a single monitor with blocking {@code wait}/{@code notifyAll} — no timed
  * polling.</p>
  */
 final class StreamPipe {
 
-    /** Chunks buffered before the writer blocks, providing back-pressure. */
+    /** Largest chunk enqueued at once; caps the copy made per write and bounds queued bytes. */
+    private static final int MAX_CHUNK_BYTES = 1 << 20;
+    /** Chunks buffered before the writer blocks: capacity is MAX_QUEUED_CHUNKS * MAX_CHUNK_BYTES. */
     private static final int MAX_QUEUED_CHUNKS = 2;
     private static final byte[] EMPTY = new byte[0];
 
@@ -135,20 +139,24 @@ final class StreamPipe {
         @Override
         public void write(byte[] src, int off, int len) throws IOException {
             Objects.checkFromIndexSize(off, len, src.length);
-            if (len == 0) {
-                return;
-            }
-            // Copy: the caller may reuse its buffer as soon as write() returns.
-            byte[] copy = Arrays.copyOfRange(src, off, off + len);
-            synchronized (lock) {
-                while (queue.size() >= MAX_QUEUED_CHUNKS && !readerClosed && failure == null) {
-                    awaitOn();
+            // Split into bounded chunks so capacity is bounded by bytes buffered, not by the
+            // number of write() calls: one huge write must be back-pressured like many small ones.
+            int written = 0;
+            while (written < len) {
+                int size = Math.min(MAX_CHUNK_BYTES, len - written);
+                // Copy: the caller may reuse its buffer as soon as write() returns.
+                byte[] copy = Arrays.copyOfRange(src, off + written, off + written + size);
+                synchronized (lock) {
+                    while (queue.size() >= MAX_QUEUED_CHUNKS && !readerClosed && failure == null) {
+                        awaitOn();
+                    }
+                    if (failure != null || readerClosed) {
+                        throw new IOException("Cannot write: the object stream is closed");
+                    }
+                    queue.addLast(copy);
+                    lock.notifyAll();
                 }
-                if (failure != null || readerClosed) {
-                    throw new IOException("Cannot write: the object stream is closed");
-                }
-                queue.addLast(copy);
-                lock.notifyAll();
+                written += size;
             }
         }
     }

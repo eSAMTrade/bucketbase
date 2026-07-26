@@ -5,8 +5,13 @@ import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.AbortMultipartUploadRequest;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
+import com.amazonaws.services.s3.model.CompleteMultipartUploadRequest;
 import com.amazonaws.services.s3.model.DeleteObjectsRequest;
+import com.amazonaws.services.s3.model.InitiateMultipartUploadRequest;
+import com.amazonaws.services.s3.model.PartETag;
+import com.amazonaws.services.s3.model.UploadPartRequest;
 import com.amazonaws.services.s3.model.DeleteObjectsResult;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.ListObjectsV2Request;
@@ -33,6 +38,8 @@ public class S3BucketSDKv1 implements IBucket {
     public static final int DEFAULT_READ_BUFFER_SIZE = 128 * 1024;
 
     private static final int DELETE_BATCH_SIZE = 1000;
+    /** S3 requires every part except the last to be at least 5 MiB. */
+    private static final int PART_SIZE = 5 * 1024 * 1024;
 
     protected AmazonS3 s3Client;
     protected String bucketName;
@@ -90,10 +97,60 @@ public class S3BucketSDKv1 implements IBucket {
     }
 
     @Override
-    public void putObjectStream(PurePosixPath name, InputStream stream) {
+    public void putObjectStream(PurePosixPath name, InputStream stream) throws IOException {
         String _name = S3Names.validateName(name);
-        ObjectMetadata metadata = new ObjectMetadata();
-        s3Client.putObject(bucketName, _name, stream, metadata);
+        uploadLargeStream(_name, stream);
+    }
+
+    /**
+     * Uploads a stream of unknown length as a multipart upload.
+     *
+     * <p>Passing the stream to {@code putObject} without a content length would make the SDK read
+     * the whole thing into memory just to measure it, which defeats streaming entirely.</p>
+     */
+    private void uploadLargeStream(String key, InputStream inputStream) throws IOException {
+        List<PartETag> partETags = new ArrayList<>();
+        String uploadId = s3Client.initiateMultipartUpload(
+                new InitiateMultipartUploadRequest(bucketName, key)).getUploadId();
+        try {
+            int partNumber = 1;
+            while (true) {
+                // readNBytes coalesces short reads into a full part - a queue-backed sink hands
+                // over whatever the caller wrote, and S3 rejects non-final parts under 5 MiB.
+                byte[] part = inputStream.readNBytes(PART_SIZE);
+                boolean lastPart = part.length < PART_SIZE;
+                // Skip a trailing empty read, but keep a single empty part for an empty object:
+                // completeMultipartUpload rejects an upload with no parts at all.
+                if (part.length > 0 || partETags.isEmpty()) {
+                    UploadPartRequest request = new UploadPartRequest()
+                            .withBucketName(bucketName)
+                            .withKey(key)
+                            .withUploadId(uploadId)
+                            .withPartNumber(partNumber++)
+                            .withInputStream(new ByteArrayInputStream(part))
+                            .withPartSize(part.length)
+                            .withLastPart(lastPart);
+                    partETags.add(s3Client.uploadPart(request).getPartETag());
+                }
+                if (lastPart) {
+                    break;
+                }
+            }
+            s3Client.completeMultipartUpload(
+                    new CompleteMultipartUploadRequest(bucketName, key, uploadId, partETags));
+        } catch (Exception e) {
+            abortQuietly(key, uploadId, e);
+            throw new IOException("Failed to upload object: " + key, e);
+        }
+    }
+
+    /** Aborts a multipart upload without letting the abort failure hide the original cause. */
+    private void abortQuietly(String key, String uploadId, Exception primary) {
+        try {
+            s3Client.abortMultipartUpload(new AbortMultipartUploadRequest(bucketName, key, uploadId));
+        } catch (Exception abortFailure) {
+            primary.addSuppressed(abortFailure);
+        }
     }
 
     @Override
