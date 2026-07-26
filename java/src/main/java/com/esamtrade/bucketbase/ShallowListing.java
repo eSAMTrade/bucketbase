@@ -1,23 +1,18 @@
 package com.esamtrade.bucketbase;
 
-import java.nio.file.Path;
-import java.util.Collections;
 import java.util.List;
 
-public class ShallowListing {
-    private final List<PurePosixPath> objects;
-    private final List<PurePosixPath> prefixes;
+/**
+ * The result of a non-recursive listing: the objects directly under a prefix, plus the common
+ * sub-prefixes (the equivalent of sub-directories).
+ *
+ * @param objects  object keys directly under the prefix
+ * @param prefixes common child prefixes (each ending with {@code /})
+ */
+public record ShallowListing(List<PurePosixPath> objects, List<PurePosixPrefix> prefixes) {
 
-    public ShallowListing(List<PurePosixPath> objects, List<PurePosixPath> prefixes) {
-        this.objects = Collections.unmodifiableList(objects);
-        this.prefixes = Collections.unmodifiableList(prefixes);
-    }
-
-    public List<PurePosixPath> getObjects() {
-        return objects;
-    }
-
-    public List<PurePosixPath> getPrefixes() {
-        return prefixes;
+    public ShallowListing {
+        objects = List.copyOf(objects);
+        prefixes = List.copyOf(prefixes);
     }
 }

@@ -1,32 +1,37 @@
 package com.esamtrade.bucketbase;
 
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import java.io.IOException;
 
+/**
+ * Functional tests for the AWS SDK v1 backend. See {@link S3BucketTest} for how the endpoint
+ * and credentials are configured.
+ */
+@EnabledIf("com.esamtrade.bucketbase.TestConfig#functionalTestsEnabled")
 class S3BucketSDKv1Test {
     private S3BucketSDKv1 bucket;
     private IBucketTester tester;
 
-    @BeforeAll
-    public static void setUpClass() {
-
-    }
-
     @BeforeEach
     public void setUp() {
-        String accessKey = System.getenv("MINIO_ACCESS_KEY");
-        String secretKey = System.getenv("MINIO_SECRET_KEY");
-        bucket = new S3BucketSDKv1("https://minio.esamtrade.vlada.ro", accessKey, secretKey, "minio-dev-tests");
+        bucket = new S3BucketSDKv1(
+                TestConfig.MINIO_ENDPOINT,
+                TestConfig.MINIO_ACCESS_KEY,
+                TestConfig.MINIO_SECRET_KEY,
+                TestConfig.MINIO_BUCKET);
+        TestConfig.ensureBucketExists(bucket);
         tester = new IBucketTester(bucket);
     }
 
     @AfterEach
     void tearDown() throws IOException {
-        tester.cleanup();
+        if (tester != null) {
+            tester.cleanup();
+        }
     }
 
 
@@ -38,6 +43,11 @@ class S3BucketSDKv1Test {
     @Test
     void putObjectAndGetObjectStream() throws IOException {
         tester.testPutAndGetObjectStream();
+    }
+
+    @Test
+    void getObjectStreamIsSeekable() throws IOException {
+        tester.testGetObjectStreamIsSeekable();
     }
 
     @Test

@@ -22,18 +22,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class IBucketTester {
 
     private static final List<String> INVALID_PREFIXES = List.of("/", "/dir", "star*1", "dir1/a\\file.txt", "at@gmail", "sharp#1", "dollar$1", "comma,");
-    private final BaseBucket storage;
+    private final IBucket storage;
     private final String uniqueSuffix;
     private final String PATH_WITH_2025_KEYS = "test-dir-with-2025-keys/";
 
-    public IBucketTester(BaseBucket storage) {
+    public IBucketTester(IBucket storage) {
         this.storage = storage;
         // Generate a unique suffix to be used in the names of dirs and files
         this.uniqueSuffix = String.format("%08d", System.currentTimeMillis() % 100_000_000);
     }
 
     public void cleanup() throws IOException {
-        storage.removePrefix(PurePosixPath.from("dir" + uniqueSuffix));
+        storage.removePrefix(PurePosixPrefix.from("dir" + uniqueSuffix));
     }
 
     public void testPutAndGetObject() throws IOException {
@@ -85,8 +85,8 @@ public class IBucketTester {
         ByteArrayInputStream gzippedStream = new ByteArrayInputStream(byteStream.toByteArray());
 
         storage.putObjectStream(path, gzippedStream);
-        try (ObjectStream file = storage.getObjectStream(path)) {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file.getStream())))) {
+        try (SeekableInputStream file = storage.getObjectStream(path)) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file)))) {
                 String[] result = new String[3];
                 for (int i = 0; i < 3; i++) {
                     result[i] = reader.readLine();
@@ -97,8 +97,8 @@ public class IBucketTester {
 
         // String path
         path = PurePosixPath.from(uniqueDir, "file1.bin");
-        try (ObjectStream file = storage.getObjectStream(path)) {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file.getStream())))) {
+        try (SeekableInputStream file = storage.getObjectStream(path)) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(file)))) {
                 char[] cbuf = new char[100];
                 int readCount = reader.read(cbuf, 0, 100);
                 String result = new String(cbuf, 0, readCount);
@@ -111,13 +111,34 @@ public class IBucketTester {
         assertThrows(FileNotFoundException.class, () -> storage.getObjectStream(nonExistentPath));
     }
 
+    public void testGetObjectStreamIsSeekable() throws IOException {
+        String uniqueDir = "dir" + uniqueSuffix;
+        PurePosixPath path = PurePosixPath.from(uniqueDir, "seekable.bin");
+        byte[] content = "0123456789abcdefghijklmnopqrstuvwxyz".getBytes();
+        storage.putObject(path, content);
+
+        try (SeekableInputStream stream = storage.getObjectStream(path)) {
+            assertEquals(content.length, stream.size());
+            assertArrayEquals("0123".getBytes(), stream.readNBytes(4));
+            stream.seek(10);
+            assertArrayEquals("abcd".getBytes(), stream.readNBytes(4));
+            stream.seek(stream.position() - 2);
+            assertArrayEquals("cd".getBytes(), stream.readNBytes(2));
+            stream.seek(stream.size() - 4);
+            assertArrayEquals("wxyz".getBytes(), stream.readNBytes(4));
+            stream.seek(stream.size() + 10);
+            assertEquals(-1, stream.read());
+            assertThrows(IOException.class, () -> stream.seek(-1));
+        }
+    }
+
     public void testListObjects() throws IOException {
         String uniqueDir = "dir" + uniqueSuffix;
         storage.putObject(PurePosixPath.from(uniqueDir, "file1.txt"), "Content 1".getBytes());
         storage.putObject(PurePosixPath.from(uniqueDir, "dir2/file2.txt"), "Content 2".getBytes());
         storage.putObject(PurePosixPath.from(uniqueDir + "file1.txt"), "Content 3".getBytes());
 
-        List<PurePosixPath> objects = storage.listObjects(PurePosixPath.from(uniqueDir)).stream().sorted().toList();
+        List<PurePosixPath> objects = storage.listObjects(PurePosixPrefix.from(uniqueDir)).stream().sorted().toList();
         List<PurePosixPath> expectedObjects = List.of(
                 PurePosixPath.from(uniqueDir, "dir2/file2.txt"),
                 PurePosixPath.from(uniqueDir, "file1.txt"),
@@ -125,7 +146,7 @@ public class IBucketTester {
                                                      );
         assertEquals(expectedObjects, objects);
 
-        objects = storage.listObjects(PurePosixPath.from(uniqueDir + "/")).stream().sorted().toList();
+        objects = storage.listObjects(PurePosixPrefix.from(uniqueDir + "/")).stream().sorted().toList();
         expectedObjects = List.of(
                 PurePosixPath.from(uniqueDir, "dir2/file2.txt"),
                 PurePosixPath.from(uniqueDir, "file1.txt")
@@ -134,7 +155,7 @@ public class IBucketTester {
 
         // Invalid Prefix cases
         for (String prefix : INVALID_PREFIXES) {
-            assertThrows(IllegalArgumentException.class, () -> storage.listObjects(PurePosixPath.from(prefix)), "Invalid prefix: " + prefix);
+            assertThrows(IllegalArgumentException.class, () -> storage.listObjects(PurePosixPrefix.from(prefix)), "Invalid prefix: " + prefix);
         }
     }
 
@@ -146,8 +167,8 @@ public class IBucketTester {
         assertEquals(2025, objects.size());
     }
 
-    private PurePosixPath ensureDirWith2025Keys() throws IOException {
-        var pathWith2025Keys = new PurePosixPath(PATH_WITH_2025_KEYS);
+    private PurePosixPrefix ensureDirWith2025Keys() throws IOException {
+        var pathWith2025Keys = new PurePosixPrefix(PATH_WITH_2025_KEYS);
         List<PurePosixPath> existingKeys = storage.listObjects(pathWith2025Keys);
         if (existingKeys.isEmpty()) {
             // Create the directory and add 2025 files
@@ -156,7 +177,8 @@ public class IBucketTester {
                     customThreadPool.submit(() ->
                                     IntStream.range(0, 2025).parallel().forEach(i -> {
                                         try {
-                                            var path = pathWith2025Keys.join("file" + i + ".txt");
+                                            var path = pathWith2025Keys.join(
+                                                    new PurePosixPath("file" + i + ".txt"));
                                             storage.putObject(path, ("Content " + i).getBytes());
                                         } catch (IOException e) {
                                             throw new RuntimeException(e);
@@ -178,8 +200,8 @@ public class IBucketTester {
         var pathWith2025Keys = ensureDirWith2025Keys();
 
         ShallowListing objects = storage.shallowListObjects(pathWith2025Keys);
-        assertEquals(2025, objects.getObjects().size());
-        assertEquals(0, objects.getPrefixes().size());
+        assertEquals(2025, objects.objects().size());
+        assertEquals(0, objects.prefixes().size());
     }
 
     public void testShallowListObjects() throws IOException {
@@ -188,26 +210,24 @@ public class IBucketTester {
         storage.putObject(new PurePosixPath(uniqueDir + "/dir2/file2.txt"), "Content 2".getBytes());
         storage.putObject(new PurePosixPath(uniqueDir + "file1.txt"), "Content 3".getBytes());
 
-        assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPath("/")));
-        assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPath("/d")));
+        assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPrefix("/")));
+        assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPrefix("/d")));
 
-        ShallowListing objects = storage.shallowListObjects(new PurePosixPath(uniqueDir + "/"));
+        ShallowListing objects = storage.shallowListObjects(new PurePosixPrefix(uniqueDir + "/"));
         List<PurePosixPath> expectedObjects = List.of(PurePosixPath.from(uniqueDir + "/file1.txt"));
-        List<PurePosixPath> expectedPrefixes = List.of(PurePosixPath.from(uniqueDir + "/dir2/"));
-        assertIterableEquals(expectedObjects, objects.getObjects());
-        assertIterableEquals(expectedPrefixes, objects.getPrefixes());
+        List<PurePosixPrefix> expectedPrefixes = List.of(PurePosixPrefix.from(uniqueDir + "/dir2/"));
+        assertIterableEquals(expectedObjects, objects.objects());
+        assertIterableEquals(expectedPrefixes, objects.prefixes());
 
-        ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPath(uniqueDir));
+        ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPrefix(uniqueDir));
         expectedObjects = List.of(new PurePosixPath(uniqueDir + "file1.txt"));
-        expectedPrefixes = List.of(PurePosixPath.from(uniqueDir + "/"));
-        assertTrue(shallowListing.getObjects() instanceof List);
-        assertTrue(shallowListing.getPrefixes() instanceof List);
-        assertIterableEquals(expectedObjects, shallowListing.getObjects());
-        assertIterableEquals(expectedPrefixes, shallowListing.getPrefixes());
+        expectedPrefixes = List.of(PurePosixPrefix.from(uniqueDir + "/"));
+        assertIterableEquals(expectedObjects, shallowListing.objects());
+        assertIterableEquals(expectedPrefixes, shallowListing.prefixes());
 
         // Invalid Prefix cases
         for (String prefix : INVALID_PREFIXES) {
-            assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPath(prefix)));
+            assertThrows(IllegalArgumentException.class, () -> storage.shallowListObjects(new PurePosixPrefix(prefix)));
         }
     }
 
@@ -218,7 +238,7 @@ public class IBucketTester {
 
         assertTrue(storage.exists(path));
         assertFalse(storage.exists(new PurePosixPath(uniqueDir)));
-        assertThrows(IllegalArgumentException.class, () -> storage.exists(new PurePosixPath(uniqueDir + "/")));
+        assertThrows(IllegalArgumentException.class, () -> storage.exists(new PurePosixPath(uniqueDir + "*")));
     }
 
     public void testRemoveObjects() throws IOException {
@@ -238,11 +258,11 @@ public class IBucketTester {
         assertFalse(storage.exists(path1));
         assertFalse(storage.exists(path2));
         assertThrows(FileNotFoundException.class, () -> storage.getObject(new PurePosixPath(uniqueDir + "/file1.txt")));
-        assertThrows(IllegalArgumentException.class, () -> storage.removeObjects(List.of(new PurePosixPath(uniqueDir + "/"))));
+        assertThrows(IllegalArgumentException.class, () -> storage.removeObjects(List.of(new PurePosixPath(uniqueDir + "*"))));
 
         // Check that the leftover empty directories are also removed, but the bucket may contain leftovers from the other test runs
-        ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPath(""));
-        List<PurePosixPath> prefixes = shallowListing.getPrefixes();
-        assertFalse(prefixes.contains(uniqueDir + "/"));
+        ShallowListing shallowListing = storage.shallowListObjects(new PurePosixPrefix(""));
+        List<PurePosixPrefix> prefixes = shallowListing.prefixes();
+        assertFalse(prefixes.contains(PurePosixPrefix.from(uniqueDir + "/")));
     }
 }

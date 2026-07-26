@@ -3,12 +3,25 @@ package com.esamtrade.bucketbase;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Objects;
 
-public abstract class AbstractAppendOnlySynchronizedBucket extends BaseBucket {
-    private final BaseBucket baseBucket;
+/**
+ * A write-once wrapper around another bucket: an object may be created but never overwritten or
+ * deleted, and concurrent writes to the same key are serialized by a lock provided by the
+ * concrete subclass. Reads are unsynchronized because a completed write is atomic.
+ *
+ * <p>Mirrors the Python library's {@code AbstractAppendOnlySynchronizedBucket}.</p>
+ */
+public abstract class AbstractAppendOnlySynchronizedBucket implements IBucket {
+    private final IBucket baseBucket;
 
-    public AbstractAppendOnlySynchronizedBucket(BaseBucket baseBucket) {
-        this.baseBucket = baseBucket;
+    protected AbstractAppendOnlySynchronizedBucket(IBucket baseBucket) {
+        this.baseBucket = Objects.requireNonNull(baseBucket, "baseBucket");
+    }
+
+    /** The wrapped bucket that all operations delegate to. */
+    protected IBucket baseBucket() {
+        return baseBucket;
     }
 
     @Override
@@ -33,37 +46,26 @@ public abstract class AbstractAppendOnlySynchronizedBucket extends BaseBucket {
 
     @Override
     public byte[] getObject(PurePosixPath name) throws IOException {
-        if (exists(name)) {
-            return baseBucket.getObject(name);
-        }
-        lockObject(name);
-        try {
-            return baseBucket.getObject(name);
-        } finally {
-            unlockObject(name);
-        }
+        return baseBucket.getObject(name);
     }
 
     @Override
-    public ObjectStream getObjectStream(PurePosixPath name) throws IOException {
-        if (exists(name)) {
-            return baseBucket.getObjectStream(name);
-        }
-        lockObject(name);
-        try {
-            return baseBucket.getObjectStream(name);
-        } finally {
-            unlockObject(name);
-        }
+    public SeekableInputStream getObjectStream(PurePosixPath name) throws IOException {
+        return baseBucket.getObjectStream(name);
     }
 
     @Override
-    public List<PurePosixPath> listObjects(PurePosixPath prefix) throws IOException {
+    public long getSize(PurePosixPath name) throws IOException {
+        return baseBucket.getSize(name);
+    }
+
+    @Override
+    public List<PurePosixPath> listObjects(PurePosixPrefix prefix) throws IOException {
         return baseBucket.listObjects(prefix);
     }
 
     @Override
-    public ShallowListing shallowListObjects(PurePosixPath prefix) throws IOException {
+    public ShallowListing shallowListObjects(PurePosixPrefix prefix) throws IOException {
         return baseBucket.shallowListObjects(prefix);
     }
 
@@ -73,8 +75,29 @@ public abstract class AbstractAppendOnlySynchronizedBucket extends BaseBucket {
     }
 
     @Override
-    public List<DeleteError> removeObjects(List<PurePosixPath> names) throws IOException {
-        throw new UnsupportedOperationException("remove_objects is not supported for AbstractAppendOnlySynchronizedBucket");
+    public List<DeleteError> removeObjects(List<PurePosixPath> names) {
+        throw new UnsupportedOperationException("removeObjects is not supported for an append-only bucket");
+    }
+
+    @Override
+    public void removePrefix(PurePosixPrefix prefix) {
+        throw new UnsupportedOperationException("removePrefix is not supported for an append-only bucket");
+    }
+
+    @Override
+    public void movePrefix(
+            IBucket dstBucket,
+            PurePosixPrefix srcPrefix,
+            PurePosixPrefix dstPrefix,
+            int threads) {
+        // Fail fast: the copy would otherwise succeed and only the delete step would fail, leaving
+        // the data duplicated.
+        throw new UnsupportedOperationException("movePrefix is not supported for an append-only bucket");
+    }
+
+    @Override
+    public void close() throws IOException {
+        baseBucket.close();
     }
 
     protected abstract void lockObject(PurePosixPath name);

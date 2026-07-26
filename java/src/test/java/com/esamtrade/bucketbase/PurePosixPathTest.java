@@ -2,181 +2,187 @@ package com.esamtrade.bucketbase;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.TreeSet;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Contract tests mirrored by {@code python/tests/test_pure_posix_path_stdlib_contract.py}.
+ *
+ * <p>The Python test runs these expectations against the installed stdlib
+ * {@code pathlib.PurePosixPath}; this class applies the same expectations to the Java port.</p>
+ */
 class PurePosixPathTest {
 
     @Test
-    void nominal_test() {
-        PurePosixPath basePath = new PurePosixPath("/home/user");
-        assertEquals("/home/user", basePath.toString());
-        assertEquals(Arrays.asList("", "home", "user"), Arrays.asList(basePath.parts));
-        basePath = new PurePosixPath("home", "user");
-        assertEquals("home/user", basePath.toString());
-        assertEquals(Arrays.asList("home", "user"), Arrays.asList(basePath.parts));
+    void constructionAndPartsMatchStdlib() {
+        PurePosixPath absolute = new PurePosixPath("/home/user");
+        assertEquals("/home/user", absolute.toString());
+        assertEquals(List.of("/", "home", "user"), absolute.parts());
+        assertEquals("/", absolute.get(0));
+
+        PurePosixPath relative = new PurePosixPath("home", "user");
+        assertEquals("home/user", relative.toString());
+        assertEquals(List.of("home", "user"), relative.parts());
+
+        PurePosixPath empty = new PurePosixPath("");
+        assertEquals(".", empty.toString());
+        assertEquals(List.of(), empty.parts());
+        assertEquals(new PurePosixPath(), empty);
     }
 
     @Test
-    void slash_ending_path() {
-        PurePosixPath basePath = new PurePosixPath("/home/user/");
-        assertEquals("/home/user/", basePath.toString());
-        assertEquals(Arrays.asList("", "home", "user", ""), Arrays.asList(basePath.parts));
-
-        basePath = new PurePosixPath("/home/user", "/");
-        assertEquals(Arrays.asList("", "home", "user", ""), Arrays.asList(basePath.parts));
-        basePath = new PurePosixPath("home/user", "/");
-        assertEquals(Arrays.asList("home", "user", ""), Arrays.asList(basePath.parts));
-
-        basePath = new PurePosixPath("./home/user", "/.");
-        assertEquals(Arrays.asList("home", "user", ""), Arrays.asList(basePath.parts));
-
-        basePath = new PurePosixPath(".", "./home/./user", "/.");
-        assertEquals(Arrays.asList("home", "user", ""), Arrays.asList(basePath.parts));
+    void redundantSeparatorsTrailingSeparatorsAndDotComponentsCollapse() {
+        assertEquals("/home/user", new PurePosixPath("/home/user/").toString());
+        assertEquals("home/user", new PurePosixPath("home//./user/.").toString());
+        assertEquals(".", new PurePosixPath("./").toString());
+        assertEquals("/", new PurePosixPath(".", "./home/./user", "/.").toString());
     }
 
     @Test
-    void handling_updir_path() {
-        PurePosixPath basePath = new PurePosixPath("/home/user/..");
-        assertEquals("/home/", basePath.toString());
-        assertEquals(Arrays.asList("", "home", ""), Arrays.asList(basePath.parts));
-
-        basePath = new PurePosixPath("/home/../user", "/");
-        assertEquals(Arrays.asList("", "user", ""), Arrays.asList(basePath.parts));
-
-        basePath = new PurePosixPath("home/../user", "/");
-        assertEquals(Arrays.asList("user", ""), Arrays.asList(basePath.parts));
+    void dotDotComponentsRemainLexical() {
+        assertEquals("/home/user/..", new PurePosixPath("/home/user/..").toString());
+        assertEquals("/../x", new PurePosixPath("/../x").toString());
+        assertEquals("/a/../../x", new PurePosixPath("/a/../../x").toString());
+        assertEquals("a/..", new PurePosixPath("a/..").toString());
+        assertEquals("../x", new PurePosixPath("../x").toString());
     }
 
     @Test
-    void join_appendsSinglePathCorrectly() {
-        PurePosixPath basePath = new PurePosixPath("/home/user");
-        PurePosixPath resultPath = basePath.join("docs");
-        assertEquals("/home/user/docs", resultPath.toString());
+    void laterAbsoluteSegmentReplacesEarlierSegments() {
+        assertEquals("/b", new PurePosixPath("/a", "/b").toString());
+        assertEquals("/", new PurePosixPath("/home/user", "/").toString());
 
-        basePath = new PurePosixPath("/home/user/");
-        resultPath = basePath.join("./docs/");
-        assertEquals("/home/user/docs/", resultPath.toString());
+        PurePosixPath base = new PurePosixPath("/a");
+        assertEquals("/b", base.join("/b").toString());
+        assertEquals("/b", base.join(new PurePosixPath("/b")).toString());
+        assertEquals("/b", base.resolve("/b").toString());
     }
 
     @Test
-    void join_appendsMultiplePathsCorrectly() {
-        PurePosixPath basePath = new PurePosixPath("/home");
-        PurePosixPath resultPath = basePath.join("user", "docs");
-        assertEquals("/home/user/docs", resultPath.toString());
-
-        basePath = new PurePosixPath("/home/");
-        resultPath = basePath.join("./user/", "./../docs/./", "./last-path/.");
-        assertEquals("/home/docs/last-path/", resultPath.toString());
+    void parentMatchesStdlib() {
+        assertEquals("/home", new PurePosixPath("/home/user").parent().toString());
+        assertEquals("/", new PurePosixPath("/home").parent().toString());
+        assertEquals("/", new PurePosixPath("/").parent().toString());
+        assertEquals(".", new PurePosixPath("leaf").parent().toString());
+        assertEquals(".", new PurePosixPath("").parent().toString());
+        assertEquals("/home/user", new PurePosixPath("/home/user/..").parent().toString());
     }
 
     @Test
-    void parent_returnsParentPathForNonRoot() {
-        PurePosixPath path = new PurePosixPath("/home/user/docs");
-        assertEquals("/home/user", path.parent().toString());
+    void nameMatchesStdlib() {
+        assertEquals("file.txt", new PurePosixPath("/home/user/file.txt").name());
+        assertEquals("..", new PurePosixPath("/home/user/..").name());
+        assertEquals("", new PurePosixPath("/").name());
+        assertEquals("", new PurePosixPath("").name());
     }
 
     @Test
-    void parent_returnsRootForRootPath() {
-        PurePosixPath path = new PurePosixPath("/");
-        // expect to raise exception when call path.parent() on the root
-        assertThrows(IllegalArgumentException.class, path::parent);
-
-        path = new PurePosixPath("");
-        assertThrows(IllegalArgumentException.class, path::parent);
+    void absoluteDetectionMatchesStdlib() {
+        assertTrue(new PurePosixPath("/home/user").isAbsolute());
+        assertTrue(new PurePosixPath("//server/share").isAbsolute());
+        assertFalse(new PurePosixPath("home/user").isAbsolute());
+        assertFalse(new PurePosixPath(".").isAbsolute());
     }
 
     @Test
-    void name_returnsFileNameForFilePath() {
-        PurePosixPath path = new PurePosixPath("/home/user/docs/file.txt");
-        assertEquals("file.txt", path.name());
+    void isRelativeToMatchesStdlib() {
+        assertTrue(new PurePosixPath("/home/user").isRelativeTo(new PurePosixPath("/home")));
+        assertFalse(new PurePosixPath("/home/user").isRelativeTo(new PurePosixPath("/etc")));
+        assertFalse(new PurePosixPath("/a").isRelativeTo(new PurePosixPath("")));
+        assertTrue(new PurePosixPath("a").isRelativeTo(new PurePosixPath(".")));
+        assertTrue(new PurePosixPath("../a").isRelativeTo(new PurePosixPath("..")));
     }
 
     @Test
-    void resolve_resolvesRelativePathAgainstBasePath() {
-        PurePosixPath basePath = new PurePosixPath("/home/user");
-        PurePosixPath resultPath = basePath.resolve("docs");
-        assertEquals("/home/user/docs", resultPath.toString());
+    void suffixSuffixesAndStemMatchStdlib() {
+        PurePosixPath archive = new PurePosixPath("archive.tar.gz");
+        assertEquals(".gz", archive.suffix());
+        assertEquals(List.of(".tar", ".gz"), archive.suffixes());
+        assertEquals("archive.tar", archive.stem());
+
+        PurePosixPath dotFile = new PurePosixPath(".bashrc");
+        assertEquals("", dotFile.suffix());
+        assertEquals(List.of(), dotFile.suffixes());
+        assertEquals(".bashrc", dotFile.stem());
+
+        // Python 3.14 treats a final dot as a valid suffix.
+        PurePosixPath finalDot = new PurePosixPath("name.");
+        assertEquals(".", finalDot.suffix());
+        assertEquals(List.of("."), finalDot.suffixes());
+        assertEquals("name", finalDot.stem());
+
+        PurePosixPath multipleLeadingDots = new PurePosixPath("..bashrc");
+        assertEquals("", multipleLeadingDots.suffix());
+        assertEquals(List.of(), multipleLeadingDots.suffixes());
+        assertEquals("..bashrc", multipleLeadingDots.stem());
     }
 
     @Test
-    void resolve_usesOtherPathIfAbsolute() {
-        PurePosixPath basePath = new PurePosixPath("/home/user");
-        PurePosixPath resultPath = basePath.resolve("/etc");
-        assertEquals("/etc", resultPath.toString());
+    void exactlyTwoLeadingSeparatorsArePreserved() {
+        assertEquals("//server/share", new PurePosixPath("//server/share").toString());
+        assertEquals(List.of("//", "server", "share"),
+                new PurePosixPath("//server/share").parts());
+        assertEquals("/server/share", new PurePosixPath("///server/share").toString());
     }
 
     @Test
-    void isAbsolute_identifiesAbsolutePath() {
-        PurePosixPath path = new PurePosixPath("/home/user");
-        assertTrue(path.isAbsolute());
+    void equalityHashingAndOrderingMatchCanonicalStdlibPaths() {
+        PurePosixPath empty = new PurePosixPath("");
+        PurePosixPath dot = new PurePosixPath(".");
+        assertEquals(empty, dot);
+        assertEquals(empty.hashCode(), dot.hashCode());
+        assertEquals(new PurePosixPath("a"), new PurePosixPath("a/"));
+
+        assertTrue(new PurePosixPath("a/b").compareTo(new PurePosixPath("a-b")) < 0);
+        assertTrue(new PurePosixPath("a").compareTo(new PurePosixPath("a/b")) < 0);
+        assertTrue(new PurePosixPath("/a").compareTo(new PurePosixPath("a")) < 0);
+        assertTrue(new PurePosixPath("//a").compareTo(new PurePosixPath("/a")) < 0);
+        assertTrue(new PurePosixPath("\uE000").compareTo(new PurePosixPath("\uD83D\uDE00")) < 0,
+                "ordering must compare Unicode code points, as Python does");
+
+        TreeSet<PurePosixPath> paths = new TreeSet<>(List.of(
+                new PurePosixPath("/home/./user"),
+                new PurePosixPath("/home/user"),
+                new PurePosixPath("/home/user2")));
+        assertEquals(2, paths.size());
     }
 
     @Test
-    void isAbsolute_identifiesRelativePath() {
-        PurePosixPath path = new PurePosixPath("home/user");
-        assertFalse(path.isAbsolute());
+    void arrayConstructorMatchesSeparateConstructorArguments() {
+        PurePosixPath fromArray = new PurePosixPath(new String[]{"a/b", "c"});
+        PurePosixPath fromArguments = new PurePosixPath("a/b", "c");
+        assertEquals(fromArguments, fromArray);
+        assertEquals(new PurePosixPath(fromArray.toString()), fromArray);
+        assertTrue(new PurePosixPath(new String[]{"/a"}).isAbsolute());
     }
 
     @Test
-    void isRelativeTo_identifiesSubPath() {
-        PurePosixPath basePath = new PurePosixPath("/home");
-        PurePosixPath otherPath = new PurePosixPath("/home/user");
-        assertTrue(otherPath.isRelativeTo(basePath));
+    void javaSpecificFactoriesPreserveTheStdlibContract() {
+        assertEquals("a/b", PurePosixPath.from("a", "b").toString());
+        assertEquals("a/b", PurePosixPath.from(Path.of("a", "b")).toString());
+        assertEquals("/", PurePosixPath.SEP);
     }
 
     @Test
-    void isRelativeTo_identifiesNonSubPath() {
-        PurePosixPath basePath = new PurePosixPath("/home");
-        PurePosixPath otherPath = new PurePosixPath("/etc");
-        assertFalse(otherPath.isRelativeTo(basePath));
+    void valueIsImmutable() throws NoSuchFieldException {
+        int classModifiers = PurePosixPath.class.getModifiers();
+        int partsModifiers = PurePosixPath.class.getDeclaredField("parts").getModifiers();
+        assertTrue(java.lang.reflect.Modifier.isFinal(classModifiers));
+        assertTrue(java.lang.reflect.Modifier.isPrivate(partsModifiers));
+        assertThrows(UnsupportedOperationException.class,
+                () -> new PurePosixPath("a/b").parts().set(0, "changed"));
     }
 
     @Test
-    void suffix_returnsFileExtension() {
-        PurePosixPath path = new PurePosixPath("/home/user/file.tar.gz");
-        assertEquals(".gz", path.suffix());
-    }
-
-    @Test
-    void suffixes_returnsAllFileExtensions() {
-        PurePosixPath path = new PurePosixPath("/home/user/archive.tar.gz");
-        assertEquals(Arrays.asList(".tar", ".gz"), path.suffixes());
-    }
-
-    @Test
-    void stem_returnsFileNameWithoutExtension() {
-        PurePosixPath path = new PurePosixPath("/home/user/file.txt");
-        assertEquals("file", path.stem());
-    }
-
-    @Test
-    void get() {
-        PurePosixPath path = new PurePosixPath("/home/user/file.txt");
-        assertEquals("", path.get(0));
-        assertEquals("home", path.get(1));
-        assertEquals("user", path.get(2));
-        assertEquals("file.txt", path.get(3));
-    }
-
-    @Test
-    void testEquals() {
-        PurePosixPath path1 = new PurePosixPath("/home/./user/file.txt");
-        PurePosixPath path2 = new PurePosixPath("/home/user/./file.txt");
-        assertEquals(path1, path2);
-    }
-
-    @Test
-    void testHashCode() {
-        PurePosixPath path1 = new PurePosixPath("/home/user/file.txt");
-        PurePosixPath path2 = new PurePosixPath("/home/user/file.txt");
-        assertEquals(path1.hashCode(), path2.hashCode());
-    }
-
-    @Test
-    void invalidPath() {
-        assertThrows(NullPointerException.class, () -> new PurePosixPath(null));
+    void nullInputsAreRejected() {
+        assertThrows(NullPointerException.class, () -> new PurePosixPath((String) null));
+        assertThrows(NullPointerException.class, () -> new PurePosixPath((String[]) null));
+        assertThrows(NullPointerException.class, () -> new PurePosixPath("a", (String[]) null));
     }
 }
