@@ -6,8 +6,20 @@ the expectations in Java's ``PurePosixPathTest`` tied to the actual stdlib
 behavior of the Python version running the BucketBase tests.
 """
 
+import sys
 import unittest
 from pathlib import PurePosixPath
+
+# Python 3.14 left-strips leading dots from the name before looking for the extension
+# separator, which changes `suffix`/`suffixes`/`stem` for names that end in a dot or start
+# with several. See CPython `pathlib`: `name.rfind('.')` guarded by `0 < i < len(name) - 1`
+# (<= 3.13) versus `name.lstrip('.').rfind('.')` (>= 3.14).
+DOTS_STRIPPED_BEFORE_SUFFIX = sys.version_info >= (3, 14)
+
+# Python 3.12 switched path ordering from the `parts` tuple (`_cparts`) to the path string
+# split on "/" (`_parts_normcase`). That reverses how a preserved "//" root sorts against "/":
+# as parts, "//" > "/"; as split strings, ("", "", "a") < ("", "a").
+ORDERING_SPLITS_THE_PATH_STRING = sys.version_info >= (3, 12)
 
 
 class TestPurePosixPathStdlibContract(unittest.TestCase):
@@ -85,14 +97,24 @@ class TestPurePosixPathStdlibContract(unittest.TestCase):
         self.assertEqual(".bashrc", dot_file.stem)
 
         final_dot = PurePosixPath("name.")
-        self.assertEqual(".", final_dot.suffix)
-        self.assertEqual(["."], final_dot.suffixes)
-        self.assertEqual("name", final_dot.stem)
+        self.assertEqual("name.", final_dot.name)
+        if DOTS_STRIPPED_BEFORE_SUFFIX:
+            self.assertEqual(".", final_dot.suffix)
+            self.assertEqual(["."], final_dot.suffixes)
+            self.assertEqual("name", final_dot.stem)
+        else:
+            self.assertEqual("", final_dot.suffix)
+            self.assertEqual([], final_dot.suffixes)
+            self.assertEqual("name.", final_dot.stem)
 
         multiple_leading_dots = PurePosixPath("..bashrc")
-        self.assertEqual("", multiple_leading_dots.suffix)
         self.assertEqual([], multiple_leading_dots.suffixes)
-        self.assertEqual("..bashrc", multiple_leading_dots.stem)
+        if DOTS_STRIPPED_BEFORE_SUFFIX:
+            self.assertEqual("", multiple_leading_dots.suffix)
+            self.assertEqual("..bashrc", multiple_leading_dots.stem)
+        else:
+            self.assertEqual(".bashrc", multiple_leading_dots.suffix)
+            self.assertEqual(".", multiple_leading_dots.stem)
 
     def test_exactly_two_leading_separators_are_preserved(self) -> None:
         self.assertEqual("//server/share", str(PurePosixPath("//server/share")))
@@ -109,8 +131,15 @@ class TestPurePosixPathStdlibContract(unittest.TestCase):
         self.assertLess(PurePosixPath("a/b"), PurePosixPath("a-b"))
         self.assertLess(PurePosixPath("a"), PurePosixPath("a/b"))
         self.assertLess(PurePosixPath("/a"), PurePosixPath("a"))
-        self.assertLess(PurePosixPath("//a"), PurePosixPath("/a"))
         self.assertLess(PurePosixPath("\ue000"), PurePosixPath("\U0001f600"))
+
+        # A preserved "//" root is a distinct path from "/" on every version, but the two sort
+        # in opposite orders depending on how the interpreter compares paths.
+        self.assertNotEqual(PurePosixPath("//a"), PurePosixPath("/a"))
+        if ORDERING_SPLITS_THE_PATH_STRING:
+            self.assertLess(PurePosixPath("//a"), PurePosixPath("/a"))
+        else:
+            self.assertLess(PurePosixPath("/a"), PurePosixPath("//a"))
 
 
 if __name__ == "__main__":
