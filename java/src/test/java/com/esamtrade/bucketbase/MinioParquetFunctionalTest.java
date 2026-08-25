@@ -59,8 +59,16 @@ class MinioParquetFunctionalTest {
 
     @AfterEach
     void tearDown() throws IOException {
-        if (bucket != null && prefix != null) {
-            bucket.removePrefix(prefix);
+        if (bucket == null) {
+            return;
+        }
+        try {
+            if (prefix != null) {
+                bucket.removePrefix(prefix);
+            }
+        } finally {
+            // This test built the client, so this test closes it. Leaking one per test method exhausts connection pools once the suite runs in parallel.
+            bucket.close();
         }
     }
 

@@ -5,8 +5,13 @@ plugins {
     id 'com.vanniktech.maven.publish' version '0.37.0'
 }
 
+// Published when no -PreleaseVersion is given. A Central release is immutable, so this must name the next UNRELEASED version: leaving an
+// already-published version here makes an accidental release fail with a 409 instead of doing nothing. Bump it after every release.
+def defaultVersion = '0.1.1'
+
 group = 'com.esamtrade'
-version = '0.1.0'
+// PUBLISHING.md documents the release command as `-PreleaseVersion=<version>`. Without reading that property here, every release would publish defaultVersion.
+version = providers.gradleProperty('releaseVersion').getOrElse(defaultVersion)
 description = 'BucketBase Java library for abstracting object storage solutions'
 
 def commonsIoVersion = '2.16.1'
@@ -54,6 +59,14 @@ tasks.withType(Test).configureEach {
     // Required only by the test-scoped Trino Parquet implementation.
     jvmArgs '--add-modules', 'jdk.incubator.vector',
             '--enable-native-access=ALL-UNNAMED'
+
+    // One JVM, many threads: JUnit's own parallel execution is configured in
+    // src/test/resources/junit-platform.properties. Forking extra JVMs on top of it would multiply
+    // the load on the shared MinIO test bucket without adding parallelism the tests can use.
+    maxParallelForks = 1
+    // Several Parquet fixtures build tens of thousands of rows in memory, and now do so at the
+    // same time as each other.
+    maxHeapSize = '2g'
 }
 
 tasks.withType(Javadoc).configureEach {
@@ -121,5 +134,10 @@ publishing.publications.withType(MavenPublication).configureEach {
 tasks.withType(PublishToMavenRepository).configureEach {
     if (name.endsWith('ToMavenCentralRepository')) {
         dependsOn tasks.named('test')
+        doFirst {
+            if (project.version.toString().endsWith('-SNAPSHOT')) {
+                throw new GradleException("Maven Central refuses a -SNAPSHOT release. Pass -PreleaseVersion=<version> with a final version, got ${project.version}")
+            }
+        }
     }
 }

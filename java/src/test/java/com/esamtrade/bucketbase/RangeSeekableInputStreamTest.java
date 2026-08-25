@@ -6,10 +6,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RangeSeekableInputStreamTest {
     private record RangeCall(long offset, int length) {
@@ -87,6 +90,34 @@ class RangeSeekableInputStreamTest {
                     throw new IOException("boom");
                 });
         assertThrows(IOException.class, () -> stream.readNBytes(10));
+    }
+
+    @Test
+    void closeReleasesTheBackingResourceExactlyOnce() throws IOException {
+        // FSBucket hands its open FileChannel over as the backing resource. Nothing else releases it, so closing the stream has to.
+        AtomicInteger closeCount = new AtomicInteger();
+        RangeSeekableInputStream stream = new RangeSeekableInputStream(4, 0,
+                (offset, dest, destOffset, length) -> Arrays.fill(dest, destOffset, destOffset + length, (byte) 7),
+                closeCount::incrementAndGet);
+
+        assertEquals(0, closeCount.get(), "the resource must stay open while the stream is readable");
+        assertArrayEquals(new byte[]{7, 7}, stream.readNBytes(2));
+
+        stream.close();
+        assertEquals(1, closeCount.get(), "close() must release the backing resource");
+
+        stream.close();
+        assertEquals(1, closeCount.get(), "a second close() must not release the resource again");
+    }
+
+    @Test
+    void closeWithoutABackingResourceStillClosesTheStream() throws IOException {
+        // The in-memory and request-per-range backends own no handle and pass null.
+        RangeSeekableInputStream stream = createStream(new byte[4], 0, new ArrayList<>());
+
+        stream.close();
+
+        assertThrows(IOException.class, stream::read);
     }
 
     @Test

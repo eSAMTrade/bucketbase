@@ -1,5 +1,6 @@
 package com.esamtrade.bucketbase;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.Objects;
 
@@ -30,6 +31,7 @@ final class RangeSeekableInputStream extends SeekableInputStream {
     private final long objectSize;
     private final int readBufferSize;
     private final RangeReader rangeReader;
+    private final Closeable backingResource;
 
     private byte[] buffer = EMPTY_BUFFER;
     private long bufferOffset;
@@ -38,6 +40,14 @@ final class RangeSeekableInputStream extends SeekableInputStream {
     private boolean closed;
 
     RangeSeekableInputStream(long objectSize, int readBufferSize, RangeReader rangeReader) {
+        this(objectSize, readBufferSize, rangeReader, null);
+    }
+
+    /**
+     * @param backingResource handle the backend opened for this stream, closed together with it. Pass {@code null} when the backend keeps none, as an in-memory or
+     *                        request-per-range backend does.
+     */
+    RangeSeekableInputStream(long objectSize, int readBufferSize, RangeReader rangeReader, Closeable backingResource) {
         if (objectSize < 0) {
             throw new IllegalArgumentException("objectSize must be non-negative");
         }
@@ -47,6 +57,7 @@ final class RangeSeekableInputStream extends SeekableInputStream {
         this.objectSize = objectSize;
         this.readBufferSize = readBufferSize;
         this.rangeReader = Objects.requireNonNull(rangeReader, "rangeReader");
+        this.backingResource = backingResource;
     }
 
     @Override
@@ -163,9 +174,15 @@ final class RangeSeekableInputStream extends SeekableInputStream {
     }
 
     @Override
-    public synchronized void close() {
+    public synchronized void close() throws IOException {
+        if (closed) {
+            return;
+        }
         closed = true;
         buffer = EMPTY_BUFFER;
+        if (backingResource != null) {
+            backingResource.close();
+        }
     }
 
     private void fillBufferAround(long from) throws IOException {

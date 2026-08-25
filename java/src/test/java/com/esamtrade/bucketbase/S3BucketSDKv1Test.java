@@ -29,8 +29,15 @@ class S3BucketSDKv1Test {
 
     @AfterEach
     void tearDown() throws IOException {
-        if (tester != null) {
-            tester.cleanup();
+        try {
+            if (tester != null) {
+                tester.cleanup();
+            }
+        } finally {
+            // This test built the client, so this test closes it. Leaking one per test method exhausts connection pools once the suite runs in parallel.
+            if (bucket != null) {
+                bucket.close();
+            }
         }
     }
 
@@ -78,5 +85,40 @@ class S3BucketSDKv1Test {
     @Test
     void testRemoveObjects() throws IOException {
         tester.testRemoveObjects();
+    }
+
+    @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
+    }
+
+    @Test
+    void fputAndFgetObject() throws IOException {
+        tester.testFputAndFgetObject();
+    }
+
+    @Test
+    void openWrite() throws IOException {
+        tester.testOpenWrite();
+    }
+
+    @Test
+    void streamingFailureAtomicity() throws IOException {
+        tester.testStreamingFailureAtomicity();
+    }
+
+    @Test
+    void putObjectStreamExceptionCleanup() throws IOException {
+        tester.testPutObjectStreamExceptionCleanup();
+    }
+
+    @Test
+    void openWritePartialWriteExceptionCleanup() throws IOException {
+        tester.testOpenWritePartialWriteExceptionCleanup();
+    }
+
+    @Test
+    void openWriteWithoutProperClose() throws IOException {
+        tester.testOpenWriteWithoutProperClose();
     }
 }

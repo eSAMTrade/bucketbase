@@ -6,9 +6,8 @@ The Gradle project publishes:
 com.esamtrade:bucketbase:<release-version>
 ```
 
-The default version is `0.1.0`. Override it for a release with
-`-PreleaseVersion=<version>`. Maven Central releases are immutable and the version must not end
-in `-SNAPSHOT`.
+The first version is `0.1.0`. Override it for a release with `-PreleaseVersion=<version>`.
+Maven Central releases are immutable, and an upload task refuses a version ending in `-SNAPSHOT`.
 
 ## Build and publication design
 
@@ -32,17 +31,31 @@ JUnit and Trino are test-only and do not appear in the production JAR or consume
 
 ## Verified local state
 
-The following were verified locally on 2026-07-24:
+Verified on 2026-07-24, and unchanged since:
 
 - the Gradle 9.6.1 distribution SHA-256 matched Gradle's published checksum;
-- the Gradle Wrapper JAR SHA-256 matched Gradle's published checksum;
-- all 95 Java tests passed, including live MinIO tests through AWS SDK v1 and v2;
-- the main, sources and Javadoc JARs were generated;
-- the Maven POM contains the required license, developer and SCM metadata;
-- all JAR, POM and Gradle-module signatures were generated and verified with GPG;
-- the complete `publishAndReleaseToMavenCentral` task graph was dry-run successfully.
+- the Gradle Wrapper JAR SHA-256 matched Gradle's published checksum.
 
-No component was uploaded while performing these checks.
+Re-verified on 2026-08-25, after `FSBucket` was added:
+
+- all 156 Java tests passed, run in parallel in one JVM, including live MinIO tests through AWS SDK v1 and v2;
+- the main, sources and Javadoc JARs were generated, and the main JAR contains `FSBucket`;
+- the Maven POM contains the required license, developer and SCM metadata;
+- all JAR, POM and Gradle-module signatures were generated and verified with GPG.
+
+## Release history
+
+Check this list before choosing a version, and verify it against Central itself with
+`curl -s -o /dev/null -w '%{http_code}' https://repo1.maven.org/maven2/com/esamtrade/bucketbase/<version>/`.
+A released version can never be reused.
+
+| Version | Released | Contents |
+|---|---|---|
+| `0.1.0` | 2026-07-24 | First release. No `FSBucket`. |
+| `0.1.1` | 2026-08-25 | Adds `FSBucket`, the local-filesystem backend. |
+
+Both are live on Maven Central. An earlier revision of this file claimed no component had ever
+been uploaded; that was wrong for `0.1.0` and led to `0.1.0` being offered as a free version.
 
 ## Prerequisites
 
@@ -75,13 +88,23 @@ BUCKETBASE_SKIP_FUNCTIONAL_TESTS=1 \
 
 Do not skip functional tests for a release.
 
+The suite runs concurrently inside a single JVM: test classes in parallel with each other, and the
+methods inside each class in parallel too. `src/test/resources/junit-platform.properties` holds the
+settings and the reasoning. The full suite takes about 30 seconds this way, against roughly four
+minutes of serial test time.
+
+This means several tests work against the configured MinIO bucket at the same time. Each one keys
+its objects under a private UUID prefix, so they do not collide. Point `MINIO_DEV_TESTS_BUCKET` at a
+bucket you are willing to have written to concurrently.
+
 ## Validate release artifacts without uploading
 
-Build the three release JARs and generate the POM:
+Build the three release JARs and generate the POM. `assemble` builds only the main and sources
+JARs, so name `plainJavadocJar` explicitly:
 
 ```bash
 ./gradlew --no-daemon --non-interactive \
-    clean test assemble generatePomFileForMavenPublication
+    clean test assemble plainJavadocJar generatePomFileForMavenPublication
 ```
 
 Inspect:
@@ -144,7 +167,7 @@ Confirm that the selected version is unused, then publish:
 
 ```bash
 ./gradlew --no-daemon --non-interactive \
-    -PreleaseVersion=0.1.0 \
+    -PreleaseVersion=0.1.2 \
     publishAndReleaseToMavenCentral
 ```
 
@@ -177,11 +200,13 @@ Central search and `repo1.maven.org` can lag behind the `PUBLISHED` state.
 
 ## Consumer dependencies
 
-Core and in-memory use:
+Core, in-memory and local-filesystem use:
 
 ```groovy
 implementation "com.esamtrade:bucketbase:<version>"
 ```
+
+`MemoryBucket` and `FSBucket` need no backend SDK.
 
 AWS SDK v2 backend:
 

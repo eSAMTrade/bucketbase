@@ -56,4 +56,38 @@ class MemoryBucketTest {
         tester.testRemoveObjects();
     }
 
+    @Test
+    void testGetSize() throws IOException {
+        tester.testGetSize();
+    }
+
+    @Test
+    void fputAndFgetObject() throws IOException {
+        tester.testFputAndFgetObject();
+    }
+
+    @Test
+    void openWrite() throws IOException {
+        tester.testOpenWrite();
+    }
+
+    @Test
+    void streamingFailureAtomicity() throws IOException {
+        tester.testStreamingFailureAtomicity();
+    }
+
+    @Test
+    void putObjectStreamExceptionCleanup() throws IOException {
+        tester.testPutObjectStreamExceptionCleanup();
+    }
+
+    @Test
+    void openWritePartialWriteExceptionCleanup() throws IOException {
+        tester.testOpenWritePartialWriteExceptionCleanup();
+    }
+
+    @Test
+    void openWriteWithoutProperClose() throws IOException {
+        tester.testOpenWriteWithoutProperClose();
+    }
 }
